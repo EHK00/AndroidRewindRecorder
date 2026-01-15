@@ -1,0 +1,66 @@
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+
+# Kotlin
+*.class
+*.log
+*.jar
+*.war
+*.ear
+
+# Android
+local.properties
+*.jks
+*.keystore
+*.apk
+*.aab
+*.ap_
+*.dex
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Local configuration
+CLAUDE.md
+.cursorrules
+docs/
+
+# Logs
+logs/
+*.log.*
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.swp
+*~
+
+# User-specific files
+*.orig
+.cache/
+
