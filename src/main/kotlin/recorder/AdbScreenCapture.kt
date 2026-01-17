@@ -231,6 +231,22 @@ class AdbScreenCapture {
     fun getCurrentMode(): CaptureMode = currentMode
 
     /**
+     * 터치 포인터 표시 설정
+     * @param enabled true면 터치 위치가 화면에 표시됨
+     */
+    suspend fun setPointerLocation(enabled: Boolean) = withContext(Dispatchers.IO) {
+        try {
+            val value = if (enabled) "1" else "0"
+            ProcessBuilder("adb", "shell", "settings", "put", "system", "pointer_location", value)
+                .redirectErrorStream(true)
+                .start()
+                .waitFor()
+        } catch (e: Exception) {
+            println("Failed to set pointer location: ${e.message}")
+        }
+    }
+
+    /**
      * 리소스 정리
      */
     fun cleanup() {

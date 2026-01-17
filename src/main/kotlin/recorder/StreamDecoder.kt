@@ -48,6 +48,7 @@ class StreamDecoder {
                 ).redirectErrorStream(false).start()
 
                 // FFmpeg로 H.264 → PNG 변환
+                // -vsync cfr: 화면이 변하지 않아도 일정한 프레임 레이트 유지
                 ffmpegProcess = ProcessBuilder(
                     "ffmpeg",
                     "-hide_banner",
@@ -55,6 +56,7 @@ class StreamDecoder {
                     "-f", "h264",
                     "-i", "pipe:0",
                     "-vf", "fps=$fps",
+                    "-vsync", "cfr",
                     "-f", "image2pipe",
                     "-vcodec", "png",
                     "pipe:1"

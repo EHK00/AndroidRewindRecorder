@@ -20,12 +20,12 @@ compose.desktop {
         mainClass = "MainKt"
 
         nativeDistributions {
-            targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
-            packageName = "AndroidScreenRecorder"
-            packageVersion = "1.0.0"
-            
+            targetFormats(TargetFormat.Dmg)
+            packageName = "AndroidRewindRecorder"
+            packageVersion = "1.0.1"
+
             macOS {
-                iconFile.set(project.file("src/main/resources/icon.icns"))
+                bundleID = "com.debugtool.androidrewindrecorder"
             }
         }
     }

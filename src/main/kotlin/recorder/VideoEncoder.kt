@@ -224,6 +224,24 @@ class VideoEncoder {
     }
     
     /**
+     * 스크린샷 저장
+     * @param imageData PNG 이미지 데이터
+     * @return 저장된 파일 경로, 실패 시 null
+     */
+    suspend fun saveScreenshot(imageData: ByteArray): String? = withContext(Dispatchers.IO) {
+        try {
+            val timestamp = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.getDefault()).format(Date())
+            val outputFile = File(outputDir, "screenshot_$timestamp.png")
+            outputFile.writeBytes(imageData)
+            println("Screenshot saved: ${outputFile.absolutePath}")
+            outputFile.absolutePath
+        } catch (e: Exception) {
+            println("Screenshot save error: ${e.message}")
+            null
+        }
+    }
+
+    /**
      * FFmpeg 설치 여부 확인
      */
     suspend fun isFFmpegAvailable(): Boolean = withContext(Dispatchers.IO) {

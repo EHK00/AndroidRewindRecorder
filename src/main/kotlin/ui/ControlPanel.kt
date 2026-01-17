@@ -34,7 +34,7 @@ fun ControlPanel(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                    .padding(horizontal = 12.dp, vertical = 4.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -69,7 +69,7 @@ fun ControlPanel(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                    .padding(horizontal = 12.dp, vertical = 4.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -97,16 +97,18 @@ fun ControlPanel(
             shape = RoundedCornerShape(8.dp)
         ) {
             Column(
-                modifier = Modifier.padding(10.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
             ) {
                 Text(
                     text = "Shortcuts",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                ShortcutRow("⌘S", "30s")
-                ShortcutRow("⌘⇧S", "Custom")
+                ShortcutRow("⌘1", "Start/Stop")
+                ShortcutRow("⌘2", "Screenshot")
+                ShortcutRow("⌘3", "Save 30s")
+                ShortcutRow("⌘⌥3", "Save Custom")
             }
         }
         

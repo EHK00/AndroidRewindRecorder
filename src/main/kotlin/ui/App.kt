@@ -10,7 +10,9 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import kotlinx.coroutines.launch
 import recorder.AdbScreenCapture
 import recorder.FrameBuffer
@@ -22,7 +24,7 @@ fun App() {
     AppTheme {
         val scope = rememberCoroutineScope()
         val focusRequester = remember { FocusRequester() }
-        
+
         var isRecording by remember { mutableStateOf(false) }
         var bufferDuration by remember { mutableStateOf(60) }
         var fps by remember { mutableStateOf(30) }
@@ -31,31 +33,38 @@ fun App() {
         var isSaving by remember { mutableStateOf(false) }
         var frameCount by remember { mutableStateOf(0) }
         var currentMemoryMB by remember { mutableStateOf(0) }  // 버퍼가 점유 중인 메모리
-        
+
         val frameBuffer = remember { FrameBuffer(maxDurationSeconds = bufferDuration, fps = fps) }
         val adbCapture = remember { AdbScreenCapture() }
         val videoEncoder = remember { VideoEncoder() }
-        
+
         // 대화상자 상태
         var showSaveDialog by remember { mutableStateOf(false) }
         var showSettingsDialog by remember { mutableStateOf(false) }
         var customDuration by remember { mutableStateOf("60") }
-        
+
+        // 터치 포인터 표시 설정 (기본값: on)
+        var showTouchPointer by remember { mutableStateOf(true) }
+        // 타임스탬프 오버레이 설정 (기본값: on)
+        var showTimestampOverlay by remember { mutableStateOf(true) }
+
         // 설정 대화상자용 임시 값
         var tempBuffer by remember { mutableStateOf(bufferDuration.toString()) }
         var tempFps by remember { mutableStateOf(fps.toString()) }
         var tempOutputPath by remember { mutableStateOf(videoEncoder.getOutputDirectory()) }
-        
+        var tempShowTouchPointer by remember { mutableStateOf(showTouchPointer) }
+        var tempShowTimestamp by remember { mutableStateOf(showTimestampOverlay) }
+
         // 초기 포커스 요청
         LaunchedEffect(Unit) {
             focusRequester.requestFocus()
         }
-        
+
         // 버퍼 설정 변경 시 업데이트
         LaunchedEffect(bufferDuration, fps) {
             frameBuffer.updateSettings(bufferDuration, fps)
         }
-        
+
         // 디바이스 연결 확인
         LaunchedEffect(Unit) {
             connectedDevice = adbCapture.getConnectedDevice()
@@ -65,10 +74,14 @@ fun App() {
                 "No device connected"
             }
         }
-        
+
         // 레코딩 루프
-        LaunchedEffect(isRecording) {
+        LaunchedEffect(isRecording, showTouchPointer) {
             if (isRecording && connectedDevice != null) {
+                frameBuffer.clear()  // 새 녹화 시작 시 버퍼 초기화
+                frameCount = 0
+                currentMemoryMB = 0
+                adbCapture.setPointerLocation(showTouchPointer)  // 터치 포인터 설정
                 statusMessage = "Recording..."
                 adbCapture.startCapturing(fps) { frame ->
                     frameBuffer.addFrame(frame)
@@ -77,36 +90,73 @@ fun App() {
                 }
             } else {
                 adbCapture.stopCapturing()
+                adbCapture.setPointerLocation(false)  // 녹화 종료 시 터치 포인터 해제
                 if (!isSaving) {
                     statusMessage = if (connectedDevice != null) "Stopped" else "No device connected"
                 }
             }
         }
-        
+
+        // 스크린샷 함수
+        fun takeScreenshot() {
+            if (isSaving) return
+            if (connectedDevice == null) {
+                statusMessage = "No device connected"
+                return
+            }
+
+            scope.launch {
+                isSaving = true
+                statusMessage = "Taking screenshot..."
+                try {
+                    val process = ProcessBuilder("adb", "exec-out", "screencap", "-p")
+                        .redirectErrorStream(false)
+                        .start()
+                    val bytes = process.inputStream.readBytes()
+                    process.waitFor()
+
+                    if (bytes.isNotEmpty() && process.exitValue() == 0) {
+                        val outputPath = videoEncoder.saveScreenshot(bytes)
+                        statusMessage = if (outputPath != null) {
+                            "Screenshot: ${outputPath.substringAfterLast("/")}"
+                        } else {
+                            "Failed to save screenshot"
+                        }
+                    } else {
+                        statusMessage = "Failed to capture screenshot"
+                    }
+                } catch (e: Exception) {
+                    statusMessage = "Error: ${e.message}"
+                } finally {
+                    isSaving = false
+                }
+            }
+        }
+
         // 저장 함수
         fun saveRecording(durationSeconds: Int) {
             if (isSaving) return
-            
+
             scope.launch {
                 val currentFrameCount = frameBuffer.getFrameCount()
                 if (currentFrameCount == 0) {
                     statusMessage = "No frames to save"
                     return@launch
                 }
-                
+
                 isSaving = true
                 statusMessage = "Saving ${durationSeconds}s..."
-                
+
                 try {
                     val frames = frameBuffer.getFramesWithTimestamp(durationSeconds)
                     if (frames.isEmpty()) {
                         statusMessage = "No frames in range"
                         return@launch
                     }
-                    
+
                     val actualFps = frameBuffer.calculateActualFps(frames)
-                    val outputPath = videoEncoder.encodeWithTimestamp(frames, actualFps, showTimestamp = true)
-                    
+                    val outputPath = videoEncoder.encodeWithTimestamp(frames, actualFps, showTimestamp = showTimestampOverlay)
+
                     statusMessage = if (outputPath != null) {
                         "Saved: ${outputPath.substringAfterLast("/")}"
                     } else {
@@ -119,11 +169,11 @@ fun App() {
                 }
             }
         }
-        
+
         // 커스텀 저장 대화상자
         if (showSaveDialog) {
             AlertDialog(
-                onDismissRequest = { 
+                onDismissRequest = {
                     showSaveDialog = false
                     focusRequester.requestFocus()
                 },
@@ -160,7 +210,7 @@ fun App() {
                     }
                 },
                 dismissButton = {
-                    TextButton(onClick = { 
+                    TextButton(onClick = {
                         showSaveDialog = false
                         focusRequester.requestFocus()
                     }) {
@@ -169,114 +219,152 @@ fun App() {
                 }
             )
         }
-        
+
         // 설정 대화상자 (컴팩트 버전)
         if (showSettingsDialog) {
-            AlertDialog(
-                onDismissRequest = { 
+            Dialog(
+                onDismissRequest = {
                     showSettingsDialog = false
                     focusRequester.requestFocus()
-                },
-                text = {
+                }
+            ) {
+                Card(
+                    modifier = Modifier.width(280.dp),
+                    shape = MaterialTheme.shapes.medium
+                ) {
                     Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                        modifier = Modifier.padding(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
+                        Text(
+                            text = "Settings",
+                            style = MaterialTheme.typography.titleSmall
+                        )
+
                         // Buffer와 FPS (한 줄)
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
                             OutlinedTextField(
                                 value = tempBuffer,
                                 onValueChange = { tempBuffer = it.filter { c -> c.isDigit() } },
-                                label = { Text("Buffer (s)") },
+                                label = { Text("Buffer (s)", style = MaterialTheme.typography.bodySmall) },
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                 singleLine = true,
-                                modifier = Modifier.weight(1f)
+                                modifier = Modifier.weight(1f).height(56.dp),
+                                textStyle = MaterialTheme.typography.bodySmall
                             )
-                            
                             OutlinedTextField(
                                 value = tempFps,
                                 onValueChange = { tempFps = it.filter { c -> c.isDigit() } },
-                                label = { Text("FPS") },
+                                label = { Text("FPS", style = MaterialTheme.typography.bodySmall) },
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                 singleLine = true,
-                                modifier = Modifier.weight(1f),
-                                supportingText = {
-                                    Text(
-                                        text = "1 ~ 60 fps",
-                                        style = MaterialTheme.typography.bodySmall
-                                    )
-                                }
+                                modifier = Modifier.weight(1f).height(56.dp),
+                                textStyle = MaterialTheme.typography.bodySmall
                             )
                         }
-                        
+
                         // 저장 경로
                         OutlinedTextField(
                             value = tempOutputPath,
                             onValueChange = { tempOutputPath = it },
-                            label = { Text("Output Directory") },
+                            label = { Text("Output Path", style = MaterialTheme.typography.bodySmall) },
                             singleLine = true,
-                            modifier = Modifier.fillMaxWidth(),
-                            supportingText = {
-                                Text(
-                                    text = "Directory where videos will be saved",
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                            }
+                            modifier = Modifier.fillMaxWidth().height(56.dp),
+                            textStyle = MaterialTheme.typography.bodySmall
                         )
-                    }
-                },
-                confirmButton = {
-                    Button(
-                        onClick = {
-                            tempBuffer.toIntOrNull()?.let { value ->
-                                if (value in 10..600) bufferDuration = value
+
+                        Spacer(modifier = Modifier.height(4.dp))
+
+                        // 토글 옵션들
+                        SettingsToggleRow(
+                            label = "Touch Pointer",
+                            description = "Display touch location on screen",
+                            checked = tempShowTouchPointer,
+                            onCheckedChange = { tempShowTouchPointer = it }
+                        )
+                        SettingsToggleRow(
+                            label = "Timestamp Overlay",
+                            description = "Show capture time on saved video",
+                            checked = tempShowTimestamp,
+                            onCheckedChange = { tempShowTimestamp = it }
+                        )
+
+                        // 버튼
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                            horizontalArrangement = Arrangement.End
+                        ) {
+                            TextButton(
+                                onClick = {
+                                    tempBuffer = bufferDuration.toString()
+                                    tempFps = fps.toString()
+                                    tempOutputPath = videoEncoder.getOutputDirectory()
+                                    tempShowTouchPointer = showTouchPointer
+                                    tempShowTimestamp = showTimestampOverlay
+                                    showSettingsDialog = false
+                                    focusRequester.requestFocus()
+                                },
+                                modifier = Modifier.height(32.dp),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)
+                            ) {
+                                Text("Cancel", style = MaterialTheme.typography.bodySmall)
                             }
-                            tempFps.toIntOrNull()?.let { value ->
-                                if (value in 1..60) fps = value
+                            TextButton(
+                                onClick = {
+                                    tempBuffer.toIntOrNull()?.let { value ->
+                                        if (value in 10..600) bufferDuration = value
+                                    }
+                                    tempFps.toIntOrNull()?.let { value ->
+                                        if (value in 1..60) fps = value
+                                    }
+                                    videoEncoder.setOutputDirectory(tempOutputPath)
+                                    showTouchPointer = tempShowTouchPointer
+                                    showTimestampOverlay = tempShowTimestamp
+                                    showSettingsDialog = false
+                                    focusRequester.requestFocus()
+                                },
+                                modifier = Modifier.height(32.dp),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)
+                            ) {
+                                Text("Apply", style = MaterialTheme.typography.bodySmall)
                             }
-                            // 저장 경로 설정
-                            videoEncoder.setOutputDirectory(tempOutputPath)
-                            showSettingsDialog = false
-                            focusRequester.requestFocus()
                         }
-                    ) {
-                        Text("Apply")
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { 
-                        tempBuffer = bufferDuration.toString()
-                        tempFps = fps.toString()
-                        tempOutputPath = videoEncoder.getOutputDirectory()
-                        showSettingsDialog = false
-                        focusRequester.requestFocus()
-                    }) {
-                        Text("Cancel")
                     }
                 }
-            )
+            }
         }
-        
+
         Surface(
             modifier = Modifier
                 .fillMaxSize()
                 .focusRequester(focusRequester)
                 .focusable()
                 .onKeyEvent { event ->
-                    if (event.type == KeyEventType.KeyDown && !isSaving) {
+                    if (event.type == KeyEventType.KeyDown) {
                         when {
-                            // Cmd/Ctrl + Shift + S: 커스텀 저장
-                            event.key == Key.S && (event.isMetaPressed || event.isCtrlPressed) && event.isShiftPressed -> {
+                            // Cmd/Ctrl + 1: Start/Stop 토글
+                            event.key == Key.One && (event.isMetaPressed || event.isCtrlPressed) -> {
+                                if (connectedDevice != null) {
+                                    isRecording = !isRecording
+                                }
+                                true
+                            }
+                            // Cmd/Ctrl + 2: 스크린샷
+                            event.key == Key.Two && (event.isMetaPressed || event.isCtrlPressed) && !isSaving -> {
+                                takeScreenshot()
+                                true
+                            }
+                            // Cmd/Ctrl + Option + 3: 커스텀 저장
+                            event.key == Key.Three && (event.isMetaPressed || event.isCtrlPressed) && event.isAltPressed && !isSaving -> {
                                 if (frameBuffer.getFrameCount() > 0) {
                                     showSaveDialog = true
                                 }
                                 true
                             }
-                            // Cmd/Ctrl + S: 30초 저장
-                            event.key == Key.S && (event.isMetaPressed || event.isCtrlPressed) -> {
+                            // Cmd/Ctrl + 3: 30초 저장
+                            event.key == Key.Three && (event.isMetaPressed || event.isCtrlPressed) && !isSaving -> {
                                 if (frameBuffer.getFrameCount() > 0) {
                                     saveRecording(30)
                                 }
@@ -291,8 +379,8 @@ fun App() {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                    .padding(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 // 컨트롤 패널
                 ControlPanel(
@@ -301,7 +389,7 @@ fun App() {
                     fps = fps,
                     connectedDevice = connectedDevice,
                     isSaving = isSaving,
-                    onRecordingToggle = { 
+                    onRecordingToggle = {
                         isRecording = !isRecording
                         focusRequester.requestFocus()
                     },
@@ -309,6 +397,8 @@ fun App() {
                         tempBuffer = bufferDuration.toString()
                         tempFps = fps.toString()
                         tempOutputPath = videoEncoder.getOutputDirectory()
+                        tempShowTouchPointer = showTouchPointer
+                        tempShowTimestamp = showTimestampOverlay
                         showSettingsDialog = true
                     },
                     onRefreshDevice = {
@@ -323,9 +413,9 @@ fun App() {
                         focusRequester.requestFocus()
                     }
                 )
-                
+
                 Spacer(modifier = Modifier.weight(1f))
-                
+
                 // 상태 표시
                 StatusBar(
                     statusMessage = statusMessage,
@@ -336,5 +426,33 @@ fun App() {
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun SettingsToggleRow(
+    label: String,
+    description: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(label, style = MaterialTheme.typography.bodySmall)
+            Text(
+                text = description,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Checkbox(
+            modifier = Modifier.size(24.dp),
+            checked = checked,
+            onCheckedChange = onCheckedChange
+        )
     }
 }
