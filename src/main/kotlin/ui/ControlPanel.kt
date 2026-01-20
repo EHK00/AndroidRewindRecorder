@@ -105,10 +105,10 @@ fun ControlPanel(
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                ShortcutRow("⌘1", "Start/Stop")
-                ShortcutRow("⌘2", "Screenshot")
-                ShortcutRow("⌘3", "Save 30s")
-                ShortcutRow("⌘⌥3", "Save Custom")
+                ShortcutRow("⌘R", "Start/Stop")
+                ShortcutRow("⌘P", "Screenshot")
+                ShortcutRow("⌘S", "Save 30s")
+                ShortcutRow("⌘⇧S", "Save Custom")
             }
         }
         

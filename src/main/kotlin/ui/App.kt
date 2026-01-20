@@ -13,6 +13,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import config.AppSettings
 import kotlinx.coroutines.launch
 import recorder.AdbScreenCapture
 import recorder.FrameBuffer
@@ -26,8 +27,8 @@ fun App() {
         val focusRequester = remember { FocusRequester() }
 
         var isRecording by remember { mutableStateOf(false) }
-        var bufferDuration by remember { mutableStateOf(60) }
-        var fps by remember { mutableStateOf(30) }
+        var bufferDuration by remember { mutableStateOf(AppSettings.bufferDuration) }
+        var fps by remember { mutableStateOf(AppSettings.fps) }
         var statusMessage by remember { mutableStateOf("Ready") }
         var connectedDevice by remember { mutableStateOf<String?>(null) }
         var isSaving by remember { mutableStateOf(false) }
@@ -36,17 +37,17 @@ fun App() {
 
         val frameBuffer = remember { FrameBuffer(maxDurationSeconds = bufferDuration, fps = fps) }
         val adbCapture = remember { AdbScreenCapture() }
-        val videoEncoder = remember { VideoEncoder() }
+        val videoEncoder = remember { VideoEncoder().apply { setOutputDirectory(AppSettings.outputPath) } }
 
         // 대화상자 상태
         var showSaveDialog by remember { mutableStateOf(false) }
         var showSettingsDialog by remember { mutableStateOf(false) }
         var customDuration by remember { mutableStateOf("60") }
 
-        // 터치 포인터 표시 설정 (기본값: on)
-        var showTouchPointer by remember { mutableStateOf(true) }
-        // 타임스탬프 오버레이 설정 (기본값: on)
-        var showTimestampOverlay by remember { mutableStateOf(true) }
+        // 터치 포인터 표시 설정 (저장된 값 로드)
+        var showTouchPointer by remember { mutableStateOf(AppSettings.showTouchPointer) }
+        // 타임스탬프 오버레이 설정 (저장된 값 로드)
+        var showTimestampOverlay by remember { mutableStateOf(AppSettings.showTimestampOverlay) }
 
         // 설정 대화상자용 임시 값
         var tempBuffer by remember { mutableStateOf(bufferDuration.toString()) }
@@ -90,10 +91,18 @@ fun App() {
                 }
             } else {
                 adbCapture.stopCapturing()
-                adbCapture.setPointerLocation(false)  // 녹화 종료 시 터치 포인터 해제
+                // isSaving 중이 아닐 때만 포인터 해제 (ADB 충돌 방지)
                 if (!isSaving) {
+                    adbCapture.setPointerLocation(false)
                     statusMessage = if (connectedDevice != null) "Stopped" else "No device connected"
                 }
+            }
+        }
+
+        // isSaving 종료 후 포인터 해제
+        LaunchedEffect(isSaving) {
+            if (!isSaving && !isRecording) {
+                adbCapture.setPointerLocation(false)
             }
         }
 
@@ -314,14 +323,24 @@ fun App() {
                             TextButton(
                                 onClick = {
                                     tempBuffer.toIntOrNull()?.let { value ->
-                                        if (value in 10..600) bufferDuration = value
+                                        if (value in 10..600) {
+                                            bufferDuration = value
+                                            AppSettings.bufferDuration = value
+                                        }
                                     }
                                     tempFps.toIntOrNull()?.let { value ->
-                                        if (value in 1..60) fps = value
+                                        if (value in 1..60) {
+                                            fps = value
+                                            AppSettings.fps = value
+                                        }
                                     }
                                     videoEncoder.setOutputDirectory(tempOutputPath)
+                                    AppSettings.outputPath = tempOutputPath
                                     showTouchPointer = tempShowTouchPointer
+                                    AppSettings.showTouchPointer = tempShowTouchPointer
                                     showTimestampOverlay = tempShowTimestamp
+                                    AppSettings.showTimestampOverlay = tempShowTimestamp
+                                    AppSettings.flush()
                                     showSettingsDialog = false
                                     focusRequester.requestFocus()
                                 },
@@ -344,27 +363,27 @@ fun App() {
                 .onKeyEvent { event ->
                     if (event.type == KeyEventType.KeyDown) {
                         when {
-                            // Cmd/Ctrl + 1: Start/Stop 토글
-                            event.key == Key.One && (event.isMetaPressed || event.isCtrlPressed) -> {
+                            // Cmd/Ctrl + R: Start/Stop 토글
+                            event.key == Key.R && (event.isMetaPressed || event.isCtrlPressed) -> {
                                 if (connectedDevice != null) {
                                     isRecording = !isRecording
                                 }
                                 true
                             }
-                            // Cmd/Ctrl + 2: 스크린샷
-                            event.key == Key.Two && (event.isMetaPressed || event.isCtrlPressed) && !isSaving -> {
+                            // Cmd/Ctrl + P: 스크린샷
+                            event.key == Key.P && (event.isMetaPressed || event.isCtrlPressed) && !isSaving -> {
                                 takeScreenshot()
                                 true
                             }
-                            // Cmd/Ctrl + Option + 3: 커스텀 저장
-                            event.key == Key.Three && (event.isMetaPressed || event.isCtrlPressed) && event.isAltPressed && !isSaving -> {
+                            // Cmd/Ctrl + Shift + S: 커스텀 저장
+                            event.key == Key.S && (event.isMetaPressed || event.isCtrlPressed) && event.isShiftPressed && !isSaving -> {
                                 if (frameBuffer.getFrameCount() > 0) {
                                     showSaveDialog = true
                                 }
                                 true
                             }
-                            // Cmd/Ctrl + 3: 30초 저장
-                            event.key == Key.Three && (event.isMetaPressed || event.isCtrlPressed) && !isSaving -> {
+                            // Cmd/Ctrl + S: 30초 저장
+                            event.key == Key.S && (event.isMetaPressed || event.isCtrlPressed) && !isSaving -> {
                                 if (frameBuffer.getFrameCount() > 0) {
                                     saveRecording(30)
                                 }

@@ -34,14 +34,25 @@ Continuously captures Android screen via ADB and saves the last N seconds/minute
    ```
 4. Launch the app
 
-### Option 2: Build from Source
+### Option 2: Run JAR (Cross-platform)
+1. Download `AndroidRewindRecorder-<os>-<arch>.jar` from Releases
+2. Run with Java 17+:
+   ```bash
+   java -jar AndroidRewindRecorder-macos-arm64-1.0.1.jar
+   ```
+
+### Option 3: Build from Source
 ```bash
 # Run directly
 ./gradlew run
 
-# Create DMG installer
-./gradlew packageDmg
+# Create DMG installer (macOS only, requires JDK with jpackage)
+JAVA_HOME=/Library/Java/JavaVirtualMachines/temurin-17.jdk/Contents/Home ./gradlew packageDmg
 # Output: build/compose/binaries/main/dmg/AndroidRewindRecorder-1.1.0.dmg
+
+# Create JAR (cross-platform)
+./gradlew packageUberJarForCurrentOS
+# Output: build/compose/jars/AndroidRewindRecorder-<os>-<arch>-1.0.1.jar
 ```
 
 ## Usage
@@ -54,10 +65,10 @@ Continuously captures Android screen via ADB and saves the last N seconds/minute
 
 | Shortcut | Action |
 |----------|--------|
-| `⌘1` | Start/Stop recording |
-| `⌘2` | Take screenshot |
-| `⌘3` | Save last 30 seconds |
-| `⌘⌥3` | Save custom duration |
+| `⌘R` | Start/Stop recording |
+| `⌘P` | Take screenshot |
+| `⌘S` | Save last 30 seconds |
+| `⌘⇧S` | Save custom duration |
 
 ### Settings
 
