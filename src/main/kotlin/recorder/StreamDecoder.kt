@@ -1,5 +1,6 @@
 package recorder
 
+import config.PathFinder
 import kotlinx.coroutines.*
 import java.io.InputStream
 import java.util.concurrent.atomic.AtomicBoolean
@@ -9,6 +10,9 @@ import java.util.concurrent.atomic.AtomicBoolean
  * screenrecord → FFmpeg → PNG frames
  */
 class StreamDecoder {
+
+    private val adbPath: String get() = PathFinder.adbPath
+    private val ffmpegPath: String get() = PathFinder.ffmpegPath
 
     private var screenrecordProcess: Process? = null
     private var ffmpegProcess: Process? = null
@@ -40,7 +44,7 @@ class StreamDecoder {
             try {
                 // screenrecord 시작 (H.264 raw stream)
                 screenrecordProcess = ProcessBuilder(
-                    "adb", "exec-out", "screenrecord",
+                    adbPath, "exec-out", "screenrecord",
                     "--output-format=h264",
                     "--size", resolution,
                     "--bit-rate", "8000000",
@@ -50,7 +54,7 @@ class StreamDecoder {
                 // FFmpeg로 H.264 → PNG 변환
                 // -vsync cfr: 화면이 변하지 않아도 일정한 프레임 레이트 유지
                 ffmpegProcess = ProcessBuilder(
-                    "ffmpeg",
+                    ffmpegPath,
                     "-hide_banner",
                     "-loglevel", "error",
                     "-f", "h264",

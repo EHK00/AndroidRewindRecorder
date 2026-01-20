@@ -1,5 +1,6 @@
 package recorder
 
+import config.PathFinder
 import kotlinx.coroutines.*
 import java.io.BufferedReader
 import java.io.InputStreamReader
@@ -33,7 +34,7 @@ class AdbScreenCapture {
      */
     suspend fun getConnectedDevice(): String? = withContext(Dispatchers.IO) {
         try {
-            val process = ProcessBuilder("adb", "devices")
+            val process = ProcessBuilder(adbPath, "devices")
                 .redirectErrorStream(true)
                 .start()
 
@@ -55,11 +56,16 @@ class AdbScreenCapture {
     }
 
     /**
+     * ADB 경로 (PathFinder에서 가져옴)
+     */
+    val adbPath: String get() = PathFinder.adbPath
+
+    /**
      * Android 버전이 screenrecord를 지원하는지 확인 (4.4+)
      */
     suspend fun isScreenrecordSupported(): Boolean = withContext(Dispatchers.IO) {
         try {
-            val process = ProcessBuilder("adb", "shell", "getprop", "ro.build.version.sdk")
+            val process = ProcessBuilder(adbPath, "shell", "getprop", "ro.build.version.sdk")
                 .redirectErrorStream(true)
                 .start()
 
@@ -207,7 +213,7 @@ class AdbScreenCapture {
     private suspend fun captureScreen(): ByteArray? = withContext(Dispatchers.IO) {
         try {
             // adb exec-out screencap -p 를 사용하여 PNG 바이트 직접 가져오기
-            val process = ProcessBuilder("adb", "exec-out", "screencap", "-p")
+            val process = ProcessBuilder(adbPath, "exec-out", "screencap", "-p")
                 .redirectErrorStream(false)
                 .start()
 
@@ -237,7 +243,7 @@ class AdbScreenCapture {
     suspend fun setPointerLocation(enabled: Boolean) = withContext(Dispatchers.IO) {
         try {
             val value = if (enabled) "1" else "0"
-            ProcessBuilder("adb", "shell", "settings", "put", "system", "pointer_location", value)
+            ProcessBuilder(adbPath, "shell", "settings", "put", "system", "pointer_location", value)
                 .redirectErrorStream(true)
                 .start()
                 .waitFor()

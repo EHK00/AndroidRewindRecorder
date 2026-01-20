@@ -1,5 +1,6 @@
 package recorder
 
+import config.PathFinder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -10,6 +11,8 @@ import java.util.*
  * FFmpeg를 사용하여 프레임들을 동영상으로 인코딩
  */
 class VideoEncoder {
+
+    private val ffmpegPath: String get() = PathFinder.ffmpegPath
     
     private var outputDir: File = File(System.getProperty("user.home"), "Desktop/AndroidRecordings")
         get() {
@@ -75,7 +78,7 @@ class VideoEncoder {
             
             // FFmpeg로 인코딩
             val process = ProcessBuilder(
-                "ffmpeg",
+                ffmpegPath,
                 "-y",                               // 덮어쓰기
                 "-framerate", fps.toString(),       // 입력 프레임레이트
                 "-i", "${tempDir.absolutePath}/frame_%05d.png",  // 입력 패턴
@@ -187,7 +190,7 @@ class VideoEncoder {
             
             // FFmpeg로 인코딩
             val process = ProcessBuilder(
-                "ffmpeg",
+                ffmpegPath,
                 "-y",                               // 덮어쓰기
                 "-framerate", fps.toString(),       // 입력 프레임레이트
                 "-i", "${tempDir.absolutePath}/frame_%05d.png",  // 입력 패턴
@@ -246,7 +249,7 @@ class VideoEncoder {
      */
     suspend fun isFFmpegAvailable(): Boolean = withContext(Dispatchers.IO) {
         try {
-            val process = ProcessBuilder("ffmpeg", "-version")
+            val process = ProcessBuilder(ffmpegPath, "-version")
                 .redirectErrorStream(true)
                 .start()
             process.waitFor()

@@ -118,7 +118,7 @@ fun App() {
                 isSaving = true
                 statusMessage = "Taking screenshot..."
                 try {
-                    val process = ProcessBuilder("adb", "exec-out", "screencap", "-p")
+                    val process = ProcessBuilder(adbCapture.adbPath, "exec-out", "screencap", "-p")
                         .redirectErrorStream(false)
                         .start()
                     val bytes = process.inputStream.readBytes()
