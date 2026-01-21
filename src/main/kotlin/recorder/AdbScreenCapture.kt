@@ -7,14 +7,23 @@ import java.io.InputStreamReader
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * scrcpy 기반 스크린 캡처
+ * screenrecord + NAL 방식 스크린 캡처
+ *
+ * H.264 NAL 유닛을 직접 버퍼에 저장하고,
+ * 저장 시 MP4로 mux (재인코딩 없음)
  */
 class AdbScreenCapture {
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
-    private var streamDecoder: StreamDecoder? = null
+    private var screenRecorder: ScreenRecorder? = null
     private val isCapturing = AtomicBoolean(false)
+
+    // NAL 버퍼 (외부에서 접근 가능)
+    val nalBuffer = NalBuffer()
+
+    // MP4 Muxer
+    val muxer = Mp4Muxer()
 
     /**
      * 연결된 Android 디바이스 ID를 반환
@@ -78,16 +87,17 @@ class AdbScreenCapture {
     val adbPath: String get() = PathFinder.adbPath
 
     /**
-     * 스크린 캡처 시작 (scrcpy 사용)
-     * @param fps 프레임 레이트
-     * @param maxSize 최대 해상도 (짧은 변 기준, 0이면 원본)
-     * @param onFrame 프레임 콜백
+     * 스크린 캡처 시작 (NAL 방식)
+     *
+     * @param maxSize 최대 해상도 (짧은 변 기준)
+     * @param bitRate 비트레이트 (bps)
+     * @param onNalReceived NAL 수신 콜백 (UI 업데이트용)
      * @param onError 에러 콜백
      */
     fun startCapturing(
-        fps: Int,
-        maxSize: Int = 0,
-        onFrame: (ByteArray) -> Unit,
+        maxSize: Int = 1280,
+        bitRate: Int = 8_000_000,
+        onNalReceived: () -> Unit = {},
         onError: (String) -> Unit = {}
     ) {
         stopCapturing()
@@ -96,11 +106,18 @@ class AdbScreenCapture {
             return
         }
 
-        streamDecoder = StreamDecoder()
-        streamDecoder?.startDecoding(
-            fps = fps,
-            maxSize = maxSize,
-            onFrame = onFrame,
+        // 해상도 문자열 생성
+        val resolution = "${maxSize}x${maxSize}"
+
+        screenRecorder = ScreenRecorder()
+        screenRecorder?.startRecording(
+            resolution = resolution,
+            bitRate = bitRate,
+            onNalUnit = { nalUnit ->
+                // NAL 버퍼에 저장
+                nalBuffer.addNalUnit(nalUnit)
+                onNalReceived()
+            },
             onError = { error ->
                 isCapturing.set(false)
                 onError(error)
@@ -113,14 +130,54 @@ class AdbScreenCapture {
      */
     fun stopCapturing() {
         isCapturing.set(false)
-        streamDecoder?.stopDecoding()
-        streamDecoder = null
+        screenRecorder?.stopRecording()
+        screenRecorder = null
     }
 
     /**
      * 캡처 중인지 확인
      */
     fun isCapturing(): Boolean = isCapturing.get()
+
+    /**
+     * 최근 N초 녹화 저장
+     *
+     * @param durationSeconds 저장할 시간 (초)
+     * @return 저장된 파일 경로, 실패 시 null
+     */
+    suspend fun saveRecording(durationSeconds: Int): String? {
+        val nalUnits = nalBuffer.getNalUnits(durationSeconds)
+        if (nalUnits.isEmpty()) {
+            println("AdbScreenCapture: No NAL units to save")
+            return null
+        }
+
+        println("AdbScreenCapture: Saving ${nalUnits.size} NAL units (${durationSeconds}s)")
+        return muxer.muxWithPts(nalUnits)
+    }
+
+    /**
+     * 스크린샷 저장
+     */
+    suspend fun saveScreenshot(): String? = withContext(Dispatchers.IO) {
+        try {
+            val process = ProcessBuilder(adbPath, "exec-out", "screencap", "-p")
+                .redirectErrorStream(false)
+                .start()
+
+            val bytes = process.inputStream.readBytes()
+            process.waitFor()
+
+            if (bytes.isNotEmpty() && process.exitValue() == 0) {
+                muxer.saveScreenshot(bytes)
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            println("Screenshot error: ${e.message}")
+            null
+        }
+    }
 
     /**
      * 터치 포인터 표시 설정
@@ -143,8 +200,8 @@ class AdbScreenCapture {
      */
     fun cleanup() {
         stopCapturing()
-        streamDecoder?.cleanup()
-        streamDecoder = null
+        screenRecorder?.cleanup()
+        screenRecorder = null
         scope.cancel()
     }
 }
