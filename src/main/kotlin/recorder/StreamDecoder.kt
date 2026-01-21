@@ -6,15 +6,19 @@ import java.io.InputStream
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * H.264 스트림을 PNG 프레임으로 디코딩
- * screenrecord → FFmpeg → PNG frames
+ * scrcpy-server를 이용한 H.264 스트림 디코딩
+ * scrcpy-server (내장) → FFmpeg → PNG frames
+ *
+ * 장점:
+ * - 외부 scrcpy 설치 불필요 (서버만 내장)
+ * - 화면 변화 없이도 안정적인 프레임 캡처
+ * - 낮은 지연 시간
  */
 class StreamDecoder {
 
-    private val adbPath: String get() = PathFinder.adbPath
     private val ffmpegPath: String get() = PathFinder.ffmpegPath
 
-    private var screenrecordProcess: Process? = null
+    private var scrcpyClient: ScrcpyClient? = null
     private var ffmpegProcess: Process? = null
     private var decodeJob: Job? = null
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -26,13 +30,13 @@ class StreamDecoder {
     /**
      * H.264 스트림 디코딩 시작
      * @param fps 추출할 FPS
-     * @param resolution 해상도 (예: "1280x720")
+     * @param maxSize 최대 해상도 (짧은 변 기준, 0이면 원본)
      * @param onFrame PNG 프레임 콜백
      * @param onError 에러 콜백
      */
     fun startDecoding(
         fps: Int = 30,
-        resolution: String = "1280x720",
+        maxSize: Int = 0,
         onFrame: (ByteArray) -> Unit,
         onError: (String) -> Unit = {}
     ) {
@@ -42,40 +46,69 @@ class StreamDecoder {
 
         decodeJob = scope.launch {
             try {
-                // screenrecord 시작 (H.264 raw stream)
-                screenrecordProcess = ProcessBuilder(
-                    adbPath, "exec-out", "screenrecord",
-                    "--output-format=h264",
-                    "--size", resolution,
-                    "--bit-rate", "8000000",
-                    "-"
-                ).redirectErrorStream(false).start()
+                println("StreamDecoder: Starting with maxSize=$maxSize, fps=$fps")
+
+                // scrcpy-server 시작 및 H.264 스트림 획득
+                scrcpyClient = ScrcpyClient()
+                val h264Stream = scrcpyClient?.start(
+                    maxSize = maxSize,
+                    maxFps = fps,
+                    bitRate = 8_000_000
+                )
+
+                if (h264Stream == null) {
+                    withContext(Dispatchers.Main) {
+                        onError("scrcpy-server 연결 실패")
+                    }
+                    isRunning.set(false)
+                    return@launch
+                }
+
+                println("StreamDecoder: H.264 stream connected")
 
                 // FFmpeg로 H.264 → PNG 변환
-                // -vsync cfr: 화면이 변하지 않아도 일정한 프레임 레이트 유지
                 ffmpegProcess = ProcessBuilder(
                     ffmpegPath,
                     "-hide_banner",
                     "-loglevel", "error",
-                    "-f", "h264",
+                    "-f", "h264",              // raw H.264 입력
                     "-i", "pipe:0",
                     "-vf", "fps=$fps",
                     "-vsync", "cfr",
                     "-f", "image2pipe",
                     "-vcodec", "png",
+                    "-compression_level", "1",  // 빠른 압축
                     "pipe:1"
                 ).redirectErrorStream(false).start()
 
-                // 파이프 연결: screenrecord stdout → ffmpeg stdin
+                // FFmpeg 에러 스트림 모니터링
+                launch(Dispatchers.IO) {
+                    try {
+                        ffmpegProcess?.errorStream?.bufferedReader()?.forEachLine { line ->
+                            if (line.isNotBlank()) println("FFmpeg: $line")
+                        }
+                    } catch (_: Exception) {}
+                }
+
+                // 파이프 연결: scrcpy H.264 → ffmpeg stdin
                 launch(Dispatchers.IO) pipeJob@{
                     try {
-                        screenrecordProcess?.inputStream?.copyTo(
-                            ffmpegProcess?.outputStream ?: return@pipeJob
-                        )
-                    } catch (_: Exception) {
-                        // 스트림 종료 시 발생 가능
+                        val buffer = ByteArray(8192)
+                        val ffmpegInput = ffmpegProcess?.outputStream ?: return@pipeJob
+
+                        while (isActive && isRunning.get()) {
+                            val bytesRead = h264Stream.read(buffer)
+                            if (bytesRead == -1) break
+
+                            ffmpegInput.write(buffer, 0, bytesRead)
+                            ffmpegInput.flush()
+                        }
+                    } catch (e: Exception) {
+                        println("StreamDecoder: Pipe error - ${e.message}")
                     } finally {
-                        ffmpegProcess?.outputStream?.close()
+                        try {
+                            ffmpegProcess?.outputStream?.close()
+                        } catch (_: Exception) {}
                     }
                 }
 
@@ -114,6 +147,7 @@ class StreamDecoder {
 
         var frameBuffer = mutableListOf<Byte>()
         var inFrame = false
+        var frameCount = 0
 
         try {
             val readBuffer = ByteArray(8192)
@@ -140,6 +174,10 @@ class StreamDecoder {
                         if (tail.contentEquals(pngEnd)) {
                             // 완전한 PNG 프레임
                             val pngData = frameBuffer.toByteArray()
+                            frameCount++
+                            if (frameCount <= 3 || frameCount % 100 == 0) {
+                                println("StreamDecoder: Frame #$frameCount (${pngData.size} bytes)")
+                            }
                             withContext(Dispatchers.Main) {
                                 onFrame(pngData)
                             }
@@ -156,7 +194,7 @@ class StreamDecoder {
                 }
             }
         } catch (e: Exception) {
-            // 스트림 종료
+            println("StreamDecoder: Stream ended - ${e.message}")
         }
     }
 
@@ -168,8 +206,8 @@ class StreamDecoder {
         decodeJob?.cancel()
         decodeJob = null
 
-        screenrecordProcess?.destroy()
-        screenrecordProcess = null
+        scrcpyClient?.stop()
+        scrcpyClient = null
 
         ffmpegProcess?.destroy()
         ffmpegProcess = null

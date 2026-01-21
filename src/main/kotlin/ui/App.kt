@@ -84,11 +84,28 @@ fun App() {
                 currentMemoryMB = 0
                 adbCapture.setPointerLocation(showTouchPointer)  // 터치 포인터 설정
                 statusMessage = "Recording..."
-                adbCapture.startCapturing(fps) { frame ->
-                    frameBuffer.addFrame(frame)
-                    frameCount = frameBuffer.getFrameCount()
-                    currentMemoryMB = frameBuffer.getTotalMemoryMB()
+
+                // 디바이스 해상도 기반 maxSize 계산 (짧은 변 기준)
+                val resolution = adbCapture.getDeviceResolution()
+                val maxSize = if (resolution != null) {
+                    minOf(resolution.first, resolution.second).coerceAtMost(1280)
+                } else {
+                    1280  // 기본값
                 }
+
+                adbCapture.startCapturing(
+                    fps = fps,
+                    maxSize = maxSize,
+                    onFrame = { frame ->
+                        frameBuffer.addFrame(frame)
+                        frameCount = frameBuffer.getFrameCount()
+                        currentMemoryMB = frameBuffer.getTotalMemoryMB()
+                    },
+                    onError = { error ->
+                        statusMessage = error
+                        isRecording = false
+                    }
+                )
             } else {
                 adbCapture.stopCapturing()
                 // isSaving 중이 아닐 때만 포인터 해제 (ADB 충돌 방지)
