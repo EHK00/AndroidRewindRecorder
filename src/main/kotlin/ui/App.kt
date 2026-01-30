@@ -52,10 +52,7 @@ fun App() {
             focusRequester.requestFocus()
         }
 
-        // 버퍼 설정 변경 시 업데이트
-        LaunchedEffect(bufferDuration) {
-            adbCapture.nalBuffer.updateSettings(bufferDuration)
-        }
+        // 버퍼 설정은 SampleRingBuffer에서 고정값 사용 (120s, 200MB)
 
         // 디바이스 연결 확인
         LaunchedEffect(Unit) {
@@ -70,7 +67,7 @@ fun App() {
         // 레코딩 루프
         LaunchedEffect(isRecording, showTouchPointer) {
             if (isRecording && connectedDevice != null) {
-                adbCapture.nalBuffer.clear()
+                adbCapture.sampleBuffer.clear()
                 frameCount = 0
                 currentMemoryMB = 0
                 adbCapture.setPointerLocation(showTouchPointer)
@@ -86,9 +83,9 @@ fun App() {
 
                 adbCapture.startCapturing(
                     maxSize = maxSize,
-                    onNalReceived = {
-                        frameCount = adbCapture.nalBuffer.getFrameCount()
-                        currentMemoryMB = adbCapture.nalBuffer.getTotalMemoryMB()
+                    onSampleReceived = {
+                        frameCount = adbCapture.sampleBuffer.getFrameCount()
+                        currentMemoryMB = adbCapture.sampleBuffer.getTotalMemoryMB()
                     },
                     onError = { error ->
                         statusMessage = error
@@ -137,12 +134,12 @@ fun App() {
             }
         }
 
-        // 저장 함수 (NAL → MP4)
+        // 저장 함수 (Sample → MP4)
         fun saveRecording(durationSeconds: Int) {
             if (isSaving) return
 
             scope.launch {
-                val currentFrameCount = adbCapture.nalBuffer.getFrameCount()
+                val currentFrameCount = adbCapture.sampleBuffer.getFrameCount()
                 if (currentFrameCount == 0) {
                     statusMessage = "No frames to save"
                     return@launch
@@ -186,7 +183,7 @@ fun App() {
                             modifier = Modifier.fillMaxWidth()
                         )
                         Text(
-                            text = "Buffer: ${adbCapture.nalBuffer.getFrameCount()} frames, ${adbCapture.nalBuffer.getTotalMemoryMB()}MB",
+                            text = "Buffer: ${adbCapture.sampleBuffer.getFrameCount()} frames, ${adbCapture.sampleBuffer.getTotalMemoryMB()}MB",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -336,14 +333,14 @@ fun App() {
                             }
                             // Cmd/Ctrl + Shift + S: 커스텀 저장
                             event.key == Key.S && (event.isMetaPressed || event.isCtrlPressed) && event.isShiftPressed && !isSaving -> {
-                                if (adbCapture.nalBuffer.getFrameCount() > 0) {
+                                if (adbCapture.sampleBuffer.getFrameCount() > 0) {
                                     showSaveDialog = true
                                 }
                                 true
                             }
                             // Cmd/Ctrl + S: 30초 저장
                             event.key == Key.S && (event.isMetaPressed || event.isCtrlPressed) && !isSaving -> {
-                                if (adbCapture.nalBuffer.getFrameCount() > 0) {
+                                if (adbCapture.sampleBuffer.getFrameCount() > 0) {
                                     saveRecording(30)
                                 }
                                 true
