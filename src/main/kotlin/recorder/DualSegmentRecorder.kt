@@ -1,5 +1,6 @@
 package recorder
 
+import config.AppSettings
 import config.PathFinder
 import kotlinx.coroutines.*
 import java.io.File
@@ -150,8 +151,9 @@ class DualSegmentRecorder(
                 cleanupRemote(remotePath)
 
                 if (pullSuccess && segmentFile.exists()) {
-                    val duration = System.currentTimeMillis() - startTime
-                    val actualDuration = minOf(duration, segmentDurationSeconds * 1000L)
+                    // Get actual MP4 duration using ffprobe (handles VFR correctly)
+                    val actualDuration = getVideoDurationMs(segmentFile)
+                        ?: (segmentDurationSeconds * 1000L)  // Fallback to expected duration
 
                     val segmentInfo = SegmentInfo(
                         file = segmentFile,
@@ -183,18 +185,25 @@ class DualSegmentRecorder(
 
     /**
      * Record a segment using adb screenrecord
+     * Uses --bugreport option when timestamp overlay is enabled
+     * This also fixes VFR issues by ensuring constant frame generation
      */
     private suspend fun recordSegment(remotePath: String, size: Int): Boolean = withContext(Dispatchers.IO) {
         try {
-            val process = ProcessBuilder(
+            val command = mutableListOf(
                 PathFinder.adbPath,
                 "shell",
                 "screenrecord",
                 "--time-limit", segmentDurationSeconds.toString(),
                 "--size", "${size}x${size}",
-                "--bit-rate", "4000000",
-                remotePath
-            ).redirectErrorStream(true).start()
+                "--bit-rate", "3000000"
+            )
+
+            command.add("--bugreport")
+
+            command.add(remotePath)
+
+            val process = ProcessBuilder(command).redirectErrorStream(true).start()
 
             // Wait for recording to complete (time-limit will auto-stop)
             val exitCode = process.waitFor()
@@ -241,6 +250,31 @@ class DualSegmentRecorder(
             ).start().waitFor()
         } catch (e: Exception) {
             // Ignore cleanup errors
+        }
+    }
+
+    /**
+     * Get actual video duration from MP4 file using ffprobe
+     * This correctly handles VFR (Variable Frame Rate) videos
+     */
+    private fun getVideoDurationMs(file: File): Long? {
+        return try {
+            val process = ProcessBuilder(
+                PathFinder.ffprobePath,
+                "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                file.absolutePath
+            ).redirectErrorStream(true).start()
+
+            val output = process.inputStream.bufferedReader().readText().trim()
+            process.waitFor()
+
+            // Parse duration in seconds and convert to milliseconds
+            output.toDoubleOrNull()?.let { (it * 1000).toLong() }
+        } catch (e: Exception) {
+            println("ffprobe error: ${e.message}")
+            null
         }
     }
 }

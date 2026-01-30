@@ -163,16 +163,15 @@ class SegmentRingBuffer(
     fun getSegmentCount(): Int = segments.size
 
     /**
-     * Get total duration in seconds
+     * Get total effective duration in seconds (accounting for overlaps)
+     * Used for buffer constraint enforcement - must match getSegmentsForDuration logic
      */
     fun getTotalDurationSeconds(): Double {
         val sorted = segments.sortedBy { it.startTimeMs }
         if (sorted.isEmpty()) return 0.0
 
-        // Calculate effective duration (accounting for overlaps)
-        val first = sorted.first()
-        val last = sorted.last()
-        return (last.endTimeMs - first.startTimeMs) / 1000.0
+        // Use effective duration (same as getSegmentsForDuration uses)
+        return calculateEffectiveDuration(sorted) / 1000.0
     }
 
     /**
