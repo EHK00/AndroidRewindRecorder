@@ -239,7 +239,7 @@ fun App() {
                         OutlinedTextField(
                             value = tempBuffer,
                             onValueChange = { tempBuffer = it.filter { c -> c.isDigit() } },
-                            label = { Text("Buffer Duration (s)", style = MaterialTheme.typography.bodySmall) },
+                            label = { Text("Buffer size(s)", style = MaterialTheme.typography.bodySmall) },
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth().height(56.dp),

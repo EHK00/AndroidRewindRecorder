@@ -12,9 +12,26 @@ class SegmentRingBuffer(
     private val segmentsDir: File
 ) {
     private val segments = ConcurrentLinkedDeque<SegmentInfo>()
+    private val protectedSegments = mutableSetOf<SegmentInfo>()
 
     init {
         segmentsDir.mkdirs()
+    }
+
+    /**
+     * Protect segments from being deleted during save operation
+     */
+    @Synchronized
+    fun protectSegments(toProtect: List<SegmentInfo>) {
+        protectedSegments.addAll(toProtect)
+    }
+
+    /**
+     * Release protection after save completes
+     */
+    @Synchronized
+    fun unprotectSegments(toUnprotect: List<SegmentInfo>) {
+        protectedSegments.removeAll(toUnprotect.toSet())
     }
 
     /**
@@ -38,7 +55,7 @@ class SegmentRingBuffer(
     /**
      * Get segments covering the requested duration (most recent)
      * Returns segments sorted by startTime ascending
-     * Uses actual time range (not sum of durations) to account for overlaps
+     * Calculates effective video duration after trimming overlaps
      */
     @Synchronized
     fun getSegmentsForDuration(seconds: Int): List<SegmentInfo> {
@@ -47,27 +64,56 @@ class SegmentRingBuffer(
 
         if (sorted.isEmpty()) return emptyList()
 
-        // Calculate actual time coverage (first start to last end)
-        val totalCoverage = sorted.last().endTimeMs - sorted.first().startTimeMs
-        if (totalCoverage <= targetDurationMs) {
+        // Calculate total effective duration (accounting for overlaps)
+        val totalEffectiveDuration = calculateEffectiveDuration(sorted)
+        if (totalEffectiveDuration <= targetDurationMs) {
             return sorted  // Return all if we don't have enough
         }
 
-        // Select segments from the end based on actual time range
-        val latestEndTime = sorted.last().endTimeMs
-        val targetStartTime = latestEndTime - targetDurationMs
-
+        // Select segments from the end until we have enough effective duration
         val result = mutableListOf<SegmentInfo>()
+        var accumulatedDuration = 0L
 
         for (segment in sorted.reversed()) {
             result.add(0, segment)
-            // Include all segments that overlap with our target time range
-            if (segment.startTimeMs <= targetStartTime) {
+
+            // Calculate effective duration of current selection
+            accumulatedDuration = calculateEffectiveDuration(result)
+
+            if (accumulatedDuration >= targetDurationMs) {
                 break
             }
         }
 
         return result
+    }
+
+    /**
+     * Calculate effective video duration after trimming overlaps
+     * This matches the actual output duration from concatPrecise()
+     */
+    private fun calculateEffectiveDuration(sortedSegments: List<SegmentInfo>): Long {
+        if (sortedSegments.isEmpty()) return 0L
+        if (sortedSegments.size == 1) return sortedSegments[0].durationMs
+
+        var totalDuration = 0L
+        var prevEndTime = 0L
+
+        sortedSegments.forEachIndexed { index, segment ->
+            if (index == 0) {
+                totalDuration += segment.durationMs
+                prevEndTime = segment.endTimeMs
+            } else {
+                // Calculate overlap with previous segment
+                val overlap = maxOf(0L, prevEndTime - segment.startTimeMs)
+                // Effective duration = segment duration - overlap
+                val effectiveDuration = maxOf(0L, segment.durationMs - overlap)
+                totalDuration += effectiveDuration
+                prevEndTime = segment.endTimeMs
+            }
+        }
+
+        return totalDuration
     }
 
     /**
@@ -147,18 +193,27 @@ class SegmentRingBuffer(
 
     /**
      * Enforce time and size constraints by removing oldest segments
+     * Protected segments are skipped during removal
      */
     private fun enforceConstraints() {
-        // Remove by duration
+        // Remove by duration (skip protected segments)
         while (getTotalDurationSeconds() > maxDurationSeconds && segments.size > 1) {
-            val oldest = segments.pollFirst()
-            oldest?.file?.delete()
+            val oldest = segments.peekFirst()
+            if (oldest != null && protectedSegments.contains(oldest)) {
+                break  // Stop if oldest is protected
+            }
+            val removed = segments.pollFirst()
+            removed?.file?.delete()
         }
 
-        // Remove by size
+        // Remove by size (skip protected segments)
         while (getTotalSizeBytes() > maxSizeBytes && segments.size > 1) {
-            val oldest = segments.pollFirst()
-            oldest?.file?.delete()
+            val oldest = segments.peekFirst()
+            if (oldest != null && protectedSegments.contains(oldest)) {
+                break  // Stop if oldest is protected
+            }
+            val removed = segments.pollFirst()
+            removed?.file?.delete()
         }
     }
 

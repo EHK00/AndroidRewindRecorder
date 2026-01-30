@@ -155,14 +155,19 @@ class AdbScreenCapture {
     /**
      * Save recording of specified duration
      * Waits for current segment to complete (max 5 seconds) before saving
+     * Protects segments from deletion during save operation
      */
     suspend fun saveRecording(durationSeconds: Int): String? = withContext(Dispatchers.IO) {
+        var bufferSegments: List<SegmentInfo> = emptyList()
         try {
             // Wait for current recording segment to complete (max ~5s wait)
             recorder.waitForCurrentSegments()
 
             // Get all segments for requested duration
-            val bufferSegments = sampleBuffer.getSegmentsForDuration(durationSeconds)
+            bufferSegments = sampleBuffer.getSegmentsForDuration(durationSeconds)
+
+            // Protect segments from being deleted during concat
+            sampleBuffer.protectSegments(bufferSegments)
 
             // Use precise concat with overlap trimming
             val outputFile = concatenator.concatPrecise(bufferSegments)
@@ -171,6 +176,11 @@ class AdbScreenCapture {
         } catch (e: Exception) {
             println("Save recording error: ${e.message}")
             return@withContext null
+        } finally {
+            // Always release protection
+            if (bufferSegments.isNotEmpty()) {
+                sampleBuffer.unprotectSegments(bufferSegments)
+            }
         }
     }
 
