@@ -96,6 +96,10 @@ fun ControlPanel(
             ),
             shape = RoundedCornerShape(8.dp)
         ) {
+            val isMac = System.getProperty("os.name").lowercase().contains("mac")
+            val mod = if (isMac) "⌘" else "Ctrl+"
+            val shift = if (isMac) "⇧" else "Shift+"
+
             Column(
                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
                 verticalArrangement = Arrangement.spacedBy(2.dp)
@@ -105,10 +109,10 @@ fun ControlPanel(
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                ShortcutRow("⌘R", "Start/Stop")
-                ShortcutRow("⌘P", "Screenshot")
-                ShortcutRow("⌘S", "Save 30s")
-                ShortcutRow("⌘⇧S", "Save Custom")
+                ShortcutRow("${mod}R", "Start/Stop")
+                ShortcutRow("${mod}P", "Screenshot")
+                ShortcutRow("${mod}S", "Save 30s")
+                ShortcutRow("$mod${shift}S", "Save Custom")
             }
         }
         

@@ -42,9 +42,11 @@ class SegmentConcatenator(
 
         if (allSegments.isEmpty()) return@withContext null
 
+        val firstStartTime = allSegments.first().startTimeMs
+
         // Single segment - just copy
         if (allSegments.size == 1) {
-            val outputFile = File(outputDir, generateOutputFileName())
+            val outputFile = File(outputDir, generateOutputFileName(firstStartTime))
             allSegments[0].file.copyTo(outputFile, overwrite = true)
             return@withContext outputFile
         }
@@ -53,10 +55,10 @@ class SegmentConcatenator(
         val concatListFile = File(outputDir, ".concat_list_${System.currentTimeMillis()}.txt")
         try {
             concatListFile.writeText(
-                allSegments.joinToString("\n") { "file '${it.file.absolutePath}'" }
+                allSegments.joinToString("\n") { "file '${it.file.absolutePath.replace("\\", "/")}'" }
             )
 
-            val outputFile = File(outputDir, generateOutputFileName())
+            val outputFile = File(outputDir, generateOutputFileName(firstStartTime))
 
             // Run ffmpeg concat
             val process = ProcessBuilder(
@@ -69,8 +71,8 @@ class SegmentConcatenator(
                 outputFile.absolutePath
             ).redirectErrorStream(true).start()
 
-            val exitCode = process.waitFor()
             val output = process.inputStream.bufferedReader().readText()
+            val exitCode = process.waitFor()
 
             if (exitCode != 0) {
                 println("FFmpeg error: $output")
@@ -93,15 +95,17 @@ class SegmentConcatenator(
 
         if (sorted.isEmpty()) return@withContext null
 
+        val firstStartTime = sorted.first().startTimeMs
+
         // Single segment - just copy
         if (sorted.size == 1) {
-            val outputFile = File(outputDir, generateOutputFileName())
+            val outputFile = File(outputDir, generateOutputFileName(firstStartTime))
             sorted[0].file.copyTo(outputFile, overwrite = true)
             return@withContext outputFile
         }
 
         // Build filter complex for trimming and concatenation
-        val outputFile = File(outputDir, generateOutputFileName())
+        val outputFile = File(outputDir, generateOutputFileName(firstStartTime))
         val inputs = sorted.flatMap { listOf("-i", it.file.absolutePath) }
 
         val filterParts = mutableListOf<String>()
@@ -143,10 +147,10 @@ class SegmentConcatenator(
         )
 
         val process = ProcessBuilder(command).redirectErrorStream(true).start()
+        val output = process.inputStream.bufferedReader().readText()
         val exitCode = process.waitFor()
 
         if (exitCode != 0) {
-            val output = process.inputStream.bufferedReader().readText()
             println("FFmpeg precise concat error: $output")
             // Fallback to simple concat (may have duplicates but works)
             return@withContext concatSimple(sorted)
@@ -155,8 +159,9 @@ class SegmentConcatenator(
         return@withContext outputFile
     }
 
-    private fun generateOutputFileName(): String {
-        val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+    private fun generateOutputFileName(startTimeMs: Long? = null): String {
+        val time = if (startTimeMs != null) Date(startTimeMs) else Date()
+        val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(time)
         return "recording_$timestamp.mp4"
     }
 }
