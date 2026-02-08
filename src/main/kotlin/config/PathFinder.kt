@@ -9,6 +9,7 @@ object PathFinder {
 
     val adbPath: String by lazy { findExecutable("adb", ADB_PATHS) }
     val ffmpegPath: String by lazy { findExecutable("ffmpeg", FFMPEG_PATHS) }
+    val ffprobePath: String by lazy { findExecutable("ffprobe", FFPROBE_PATHS) }
 
     private val ADB_PATHS = listOf(
         "/opt/homebrew/bin/adb",           // Homebrew (Apple Silicon)
@@ -20,6 +21,12 @@ object PathFinder {
         "/opt/homebrew/bin/ffmpeg",        // Homebrew (Apple Silicon)
         "/usr/local/bin/ffmpeg",           // Homebrew (Intel)
         "/usr/bin/ffmpeg"                  // Linux 기본
+    )
+
+    private val FFPROBE_PATHS = listOf(
+        "/opt/homebrew/bin/ffprobe",       // Homebrew (Apple Silicon)
+        "/usr/local/bin/ffprobe",          // Homebrew (Intel)
+        "/usr/bin/ffprobe"                 // Linux 기본
     )
 
     private fun findExecutable(name: String, commonPaths: List<String>): String {

@@ -72,7 +72,7 @@ JAVA_HOME=/Library/Java/JavaVirtualMachines/temurin-17.jdk/Contents/Home ./gradl
 
 ### Settings
 
-- **Buffer Duration**: Memory storage time (10s ~ 10min)
+- **Buffer size**: Memory storage time (10s ~ 10min)
 - **FPS**: Capture frame rate (1 ~ 60fps)
 - **Output Directory**: Video/screenshot save location
 - **Touch Pointer**: Show touch location on screen (default: ON)

@@ -1,266 +1,237 @@
 package recorder
 
+import config.AppSettings
 import config.PathFinder
-import kotlinx.coroutines.*
-import java.io.BufferedReader
-import java.io.InputStreamReader
-import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.*
 
 /**
- * 캡처 모드
+ * Main controller for Android screen capture using dual segment recording
+ * Maintains backward compatibility with existing UI (App.kt)
  */
-enum class CaptureMode {
-    SCREENCAP,      // 기존 방식: 개별 스크린샷 (저FPS, 호환성 높음)
-    SCREENRECORD    // 새 방식: H.264 스트림 (고FPS, Android 4.4+)
-}
-
 class AdbScreenCapture {
 
-    private var captureJob: Job? = null
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val outputDir = File(AppSettings.outputPath)
+    private val segmentsDir = File(outputDir, ".segments")
 
-    // 듀얼 스트림 관리
-    private var streamDecoderA: StreamDecoder? = null
-    private var streamDecoderB: StreamDecoder? = null
-    private var streamSchedulerJob: Job? = null
-    private val isStreaming = AtomicBoolean(false)
+    // Buffer size based on user setting + 20% margin for safety
+    private val bufferDurationSeconds: Int
+        get() = (AppSettings.bufferDuration * 1.2).toInt().coerceAtLeast(30)
 
-    // 현재 캡처 모드
-    private var currentMode = CaptureMode.SCREENCAP
+    // Estimate max size: ~2MB per 5s segment, so bufferDuration/5 * 2MB * 1.5 margin
+    private val bufferMaxSizeBytes: Long
+        get() = (bufferDurationSeconds / 5L * 2 * 1024 * 1024 * 1.5).toLong()
+
+    // Public buffers for UI compatibility
+    val sampleBuffer: SegmentRingBuffer = SegmentRingBuffer(
+        maxDurationSeconds = bufferDurationSeconds,
+        maxSizeBytes = bufferMaxSizeBytes,
+        segmentsDir = segmentsDir
+    )
+
+    // Muxer interface for UI compatibility
+    val muxer: MuxerInterface = MuxerInterfaceImpl()
+
+    private val concatenator = SegmentConcatenator(outputDir)
+    private val recorder = DualSegmentRecorder(
+        buffer = sampleBuffer,
+        segmentsDir = segmentsDir
+        // Uses default: 5s segments, 2s offset, 3s overlap
+    )
+
+    init {
+        outputDir.mkdirs()
+        segmentsDir.mkdirs()
+    }
 
     /**
-     * 연결된 Android 디바이스 ID를 반환
+     * Get currently connected Android device
      */
     suspend fun getConnectedDevice(): String? = withContext(Dispatchers.IO) {
         try {
-            val process = ProcessBuilder(adbPath, "devices")
-                .redirectErrorStream(true)
-                .start()
+            val process = ProcessBuilder(
+                PathFinder.adbPath, "devices"
+            ).redirectErrorStream(true).start()
 
-            val reader = BufferedReader(InputStreamReader(process.inputStream))
-            val lines = reader.readLines()
+            val output = process.inputStream.bufferedReader().readText()
             process.waitFor()
 
-            // "List of devices attached" 다음 줄에서 device ID 찾기
-            lines.drop(1)
-                .map { it.trim() }
-                .filter { it.isNotEmpty() && it.contains("device") && !it.contains("unauthorized") }
-                .firstOrNull()
-                ?.split("\\s+".toRegex())
-                ?.firstOrNull()
-        } catch (e: Exception) {
-            println("Error getting device: ${e.message}")
-            null
-        }
-    }
-
-    /**
-     * ADB 경로 (PathFinder에서 가져옴)
-     */
-    val adbPath: String get() = PathFinder.adbPath
-
-    /**
-     * Android 버전이 screenrecord를 지원하는지 확인 (4.4+)
-     */
-    suspend fun isScreenrecordSupported(): Boolean = withContext(Dispatchers.IO) {
-        try {
-            val process = ProcessBuilder(adbPath, "shell", "getprop", "ro.build.version.sdk")
-                .redirectErrorStream(true)
-                .start()
-
-            val reader = BufferedReader(InputStreamReader(process.inputStream))
-            val sdkVersion = reader.readLine()?.trim()?.toIntOrNull() ?: 0
-            process.waitFor()
-
-            sdkVersion >= 19 // Android 4.4 = API 19
-        } catch (e: Exception) {
-            false
-        }
-    }
-
-    /**
-     * 스크린 캡처 시작
-     * @param fps 프레임 레이트
-     * @param mode 캡처 모드 (SCREENCAP 또는 SCREENRECORD)
-     * @param onFrame 프레임 콜백
-     */
-    fun startCapturing(
-        fps: Int,
-        mode: CaptureMode = CaptureMode.SCREENRECORD,
-        onFrame: (ByteArray) -> Unit
-    ) {
-        stopCapturing()
-        currentMode = mode
-
-        when (mode) {
-            CaptureMode.SCREENCAP -> startScreencapMode(fps, onFrame)
-            CaptureMode.SCREENRECORD -> startScreenrecordMode(fps, onFrame)
-        }
-    }
-
-    /**
-     * 기존 screencap 방식 (저FPS, 호환성)
-     */
-    private fun startScreencapMode(fps: Int, onFrame: (ByteArray) -> Unit) {
-        val interval = 1000L / fps
-
-        captureJob = scope.launch {
-            while (isActive) {
-                val startTime = System.currentTimeMillis()
-
-                try {
-                    val frame = captureScreen()
-                    if (frame != null) {
-                        withContext(Dispatchers.Main) {
-                            onFrame(frame)
-                        }
-                    }
-                } catch (e: Exception) {
-                    println("Capture error: ${e.message}")
-                }
-
-                // 프레임 간격 유지
-                val elapsed = System.currentTimeMillis() - startTime
-                val sleepTime = interval - elapsed
-                if (sleepTime > 0) {
-                    delay(sleepTime)
+            val lines = output.lines()
+            for (line in lines) {
+                if (line.contains("\tdevice")) {
+                    return@withContext line.split("\t").firstOrNull()?.trim()
                 }
             }
+            return@withContext null
+        } catch (e: Exception) {
+            return@withContext null
         }
     }
 
     /**
-     * screenrecord 듀얼 스트림 방식 (고FPS, 갭 없음)
+     * Get device screen resolution
      */
-    private fun startScreenrecordMode(fps: Int, onFrame: (ByteArray) -> Unit) {
-        if (isStreaming.getAndSet(true)) {
-            return
-        }
+    fun getDeviceResolution(): Pair<Int, Int>? {
+        return try {
+            val process = ProcessBuilder(
+                PathFinder.adbPath, "shell", "wm", "size"
+            ).redirectErrorStream(true).start()
 
-        val recordDurationMs = 60_000L      // 60초 녹화
-        val overlapStartMs = 50_000L        // 50초 지점에서 다음 스트림 시작 (10초 오버랩)
-
-        streamDecoderA = StreamDecoder()
-        streamDecoderB = StreamDecoder()
-
-        streamSchedulerJob = scope.launch {
-            var useA = true
-
-            while (isActive && isStreaming.get()) {
-                val currentDecoder = if (useA) streamDecoderA else streamDecoderB
-                val nextDecoder = if (useA) streamDecoderB else streamDecoderA
-
-                // 현재 스트림 시작
-                currentDecoder?.startDecoding(
-                    fps = fps,
-                    onFrame = { frame ->
-                        onFrame(frame)
-                    },
-                    onError = { error ->
-                        println("Stream error: $error")
-                    }
-                )
-
-                // 오버랩 시작 시점까지 대기
-                delay(overlapStartMs)
-
-                if (!isActive || !isStreaming.get()) break
-
-                // 다음 스트림 시작 (오버랩)
-                nextDecoder?.startDecoding(
-                    fps = fps,
-                    onFrame = { frame ->
-                        onFrame(frame)
-                    },
-                    onError = { error ->
-                        println("Stream error: $error")
-                    }
-                )
-
-                // 현재 스트림 종료 시점까지 대기
-                delay(recordDurationMs - overlapStartMs)
-
-                // 현재 스트림 종료
-                currentDecoder?.stopDecoding()
-
-                // 다음 사이클을 위해 전환
-                useA = !useA
-            }
-        }
-    }
-
-    /**
-     * 스크린 캡처 중지
-     */
-    fun stopCapturing() {
-        // screencap 모드 중지
-        captureJob?.cancel()
-        captureJob = null
-
-        // screenrecord 모드 중지
-        isStreaming.set(false)
-        streamSchedulerJob?.cancel()
-        streamSchedulerJob = null
-
-        streamDecoderA?.stopDecoding()
-        streamDecoderB?.stopDecoding()
-    }
-
-    /**
-     * 단일 스크린샷 캡처 (screencap 방식)
-     */
-    private suspend fun captureScreen(): ByteArray? = withContext(Dispatchers.IO) {
-        try {
-            // adb exec-out screencap -p 를 사용하여 PNG 바이트 직접 가져오기
-            val process = ProcessBuilder(adbPath, "exec-out", "screencap", "-p")
-                .redirectErrorStream(false)
-                .start()
-
-            val bytes = process.inputStream.readBytes()
+            val output = process.inputStream.bufferedReader().readText()
             process.waitFor()
 
-            if (bytes.isNotEmpty() && process.exitValue() == 0) {
-                bytes
+            // Parse "Physical size: 1080x2400"
+            val match = Regex("""(\d+)x(\d+)""").find(output)
+            if (match != null) {
+                val width = match.groupValues[1].toInt()
+                val height = match.groupValues[2].toInt()
+                Pair(width, height)
             } else {
                 null
             }
         } catch (e: Exception) {
-            println("Screenshot error: ${e.message}")
             null
         }
     }
 
     /**
-     * 현재 캡처 모드 반환
+     * Calculate optimal recording size based on device resolution
      */
-    fun getCurrentMode(): CaptureMode = currentMode
+    private fun calculateRecordingSize(resolution: Pair<Int, Int>?): Int {
+        if (resolution == null) return 720
 
-    /**
-     * 터치 포인터 표시 설정
-     * @param enabled true면 터치 위치가 화면에 표시됨
-     */
-    suspend fun setPointerLocation(enabled: Boolean) = withContext(Dispatchers.IO) {
-        try {
-            val value = if (enabled) "1" else "0"
-            ProcessBuilder(adbPath, "shell", "settings", "put", "system", "pointer_location", value)
-                .redirectErrorStream(true)
-                .start()
-                .waitFor()
-        } catch (e: Exception) {
-            println("Failed to set pointer location: ${e.message}")
+        val minDim = minOf(resolution.first, resolution.second)
+        return when {
+            minDim >= 1440 -> 1080  // QHD+ → FHD
+            minDim >= 1080 -> 720   // FHD → HD
+            minDim >= 720 -> 540    // HD → qHD
+            else -> minDim          // Original
         }
     }
 
     /**
-     * 리소스 정리
+     * Set touch pointer visibility on device
      */
-    fun cleanup() {
-        stopCapturing()
-        streamDecoderA?.cleanup()
-        streamDecoderB?.cleanup()
-        streamDecoderA = null
-        streamDecoderB = null
-        scope.cancel()
+    fun setPointerLocation(enable: Boolean) {
+        try {
+            val value = if (enable) "1" else "0"
+            ProcessBuilder(
+                PathFinder.adbPath, "shell",
+                "settings", "put", "system", "pointer_location", value
+            ).start().waitFor()
+        } catch (e: Exception) {
+            // Ignore errors
+        }
     }
+
+    /**
+     * Start capturing with dual recorder
+     * Compatible with existing App.kt interface
+     */
+    suspend fun startCapturing(
+        maxSize: Int,
+        onSampleReceived: () -> Unit,
+        onError: (String) -> Unit
+    ) {
+        val size = if (maxSize > 0) maxSize else calculateRecordingSize(getDeviceResolution())
+
+        recorder.start(
+            size = size,
+            onSegmentReceived = { onSampleReceived() },
+            onError = onError
+        )
+    }
+
+    /**
+     * Stop capturing
+     */
+    fun stopCapturing() {
+        recorder.stop()
+    }
+
+    /**
+     * Save recording of specified duration
+     * Waits for current segment to complete (max 5 seconds) before saving
+     * Protects segments from deletion during save operation
+     */
+    suspend fun saveRecording(durationSeconds: Int): String? = withContext(Dispatchers.IO) {
+        var bufferSegments: List<SegmentInfo> = emptyList()
+        try {
+            // Wait for current recording segment to complete (max ~5s wait)
+            recorder.waitForCurrentSegments()
+
+            // Get all segments for requested duration
+            bufferSegments = sampleBuffer.getSegmentsForDuration(durationSeconds)
+
+            // Protect segments from being deleted during concat
+            sampleBuffer.protectSegments(bufferSegments)
+
+            // Use precise concat with overlap trimming
+            val outputFile = concatenator.concatPrecise(bufferSegments)
+
+            return@withContext outputFile?.absolutePath
+        } catch (e: Exception) {
+            println("Save recording error: ${e.message}")
+            return@withContext null
+        } finally {
+            // Always release protection
+            if (bufferSegments.isNotEmpty()) {
+                sampleBuffer.unprotectSegments(bufferSegments)
+            }
+        }
+    }
+
+    /**
+     * Take a screenshot
+     */
+    suspend fun saveScreenshot(): String? = withContext(Dispatchers.IO) {
+        try {
+            val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+            val outputFile = File(outputDir, "screenshot_$timestamp.png")
+            val remotePath = "/sdcard/screenshot_temp.png"
+
+            // Capture screenshot
+            val captureProcess = ProcessBuilder(
+                PathFinder.adbPath, "shell", "screencap", "-p", remotePath
+            ).start()
+            captureProcess.waitFor()
+
+            // Pull to local
+            val pullProcess = ProcessBuilder(
+                PathFinder.adbPath, "pull", remotePath, outputFile.absolutePath
+            ).start()
+            pullProcess.waitFor()
+
+            // Cleanup
+            ProcessBuilder(
+                PathFinder.adbPath, "shell", "rm", remotePath
+            ).start()
+
+            return@withContext if (outputFile.exists()) outputFile.absolutePath else null
+        } catch (e: Exception) {
+            return@withContext null
+        }
+    }
+
+    /**
+     * Muxer interface wrapper for UI compatibility
+     */
+    inner class MuxerInterfaceImpl : MuxerInterface {
+        override fun getOutputDirectory(): String = concatenator.getOutputDirectory()
+
+        override fun setOutputDirectory(path: String) {
+            concatenator.setOutputDirectory(path)
+        }
+    }
+}
+
+/**
+ * Interface for muxer to maintain UI compatibility
+ */
+interface MuxerInterface {
+    fun getOutputDirectory(): String
+    fun setOutputDirectory(path: String)
 }
