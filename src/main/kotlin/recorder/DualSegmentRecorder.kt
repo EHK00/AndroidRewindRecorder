@@ -4,6 +4,8 @@ import config.AppSettings
 import config.PathFinder
 import kotlinx.coroutines.*
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.*
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -129,11 +131,12 @@ class DualSegmentRecorder(
 
         while (isRunning.get()) {
             val index = counter.incrementAndGet()
-            val segmentFile = File(segmentsDir, "seg_${slot.name}_${String.format("%03d", index)}.mp4")
+            val startTime = System.currentTimeMillis()
+            val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.getDefault()).format(Date(startTime))
+            val segmentFile = File(segmentsDir, "seg_${slot.name}_${timestamp}.mp4")
             val remotePath = "/sdcard/rec_${slot.name}_$index.mp4"
 
             try {
-                val startTime = System.currentTimeMillis()
 
                 // Record segment on device
                 val recordSuccess = recordSegment(remotePath, recordingSize)

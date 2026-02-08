@@ -1,5 +1,6 @@
 package config
 
+import java.io.File
 import java.util.prefs.Preferences
 
 object AppSettings {
@@ -14,7 +15,7 @@ object AppSettings {
     // 기본값
     private const val DEFAULT_BUFFER_DURATION = 60
     private const val DEFAULT_FPS = 30
-    private val DEFAULT_OUTPUT_PATH = "${System.getProperty("user.home")}/Desktop/AndroidRecordings"
+    private val DEFAULT_OUTPUT_PATH = File(System.getProperty("user.home"), "Desktop/AndroidRecordings").absolutePath
     private const val DEFAULT_SHOW_TOUCH_POINTER = true
     private const val DEFAULT_SHOW_TIMESTAMP_OVERLAY = true
 

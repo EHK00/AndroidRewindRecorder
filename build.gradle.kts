@@ -24,12 +24,17 @@ compose.desktop {
         mainClass = "MainKt"
 
         nativeDistributions {
-            targetFormats(TargetFormat.Dmg)
+            targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Exe)
             packageName = "AndroidRewindRecorder"
             packageVersion = "1.0.1"
 
             macOS {
                 bundleID = "com.debugtool.androidrewindrecorder"
+            }
+
+            windows {
+                menuGroup = "AndroidRewindRecorder"
+                upgradeUuid = "d3b07384-d9a0-4e6b-8b0d-5c6a7e8f9a0b"
             }
         }
     }

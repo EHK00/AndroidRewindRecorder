@@ -150,6 +150,7 @@ class AdbScreenCapture {
      */
     fun stopCapturing() {
         recorder.stop()
+        sampleBuffer.cleanup()
     }
 
     /**
