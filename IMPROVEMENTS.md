@@ -2,27 +2,70 @@
 
 ## Summary
 
-| Category | Critical | High | Medium | Low | Total |
-|----------|----------|------|--------|-----|-------|
-| Functional Bug | 2 | 3 | 1 | - | 6 |
-| Bug / Reliability | 3 | 2 | 1 | 1 | 7 |
-| Performance | 1 | 1 | 1 | - | 3 |
-| UX | - | 2 | 3 | - | 5 |
-| Architecture | - | 1 | 2 | - | 3 |
-| **Total** | **6** | **9** | **8** | **1** | **24** |
+| Severity | Count | Description |
+|----------|-------|-------------|
+| Critical | 3 | Data loss, wrong output on every use, major performance block |
+| High | 8 | Silent data loss, process leaks, hangs, crashes in specific scenarios |
+| Medium | 10 | Partial functionality, missing feedback, workarounds exist |
+| Low | 8 | Cosmetic, rare edge cases, architecture concerns |
+| **Total** | **29** | |
+
+### Priority Changes from Previous Assessment
+
+| ID | Previous | New | Reason |
+|----|----------|-----|--------|
+| F-2 | High | **Critical** | Affects **every recording** on every device — most visible bug |
+| F-3 | High | Medium | Rare trigger (only when user changes output path) |
+| R-4 | Medium | **High** | Causes cascading failures on every Stop→Start cycle |
+| M-5 | Medium | **High** | Thread safety bug can cause data corruption or crash |
+| C-2 | Critical | High | Resource leak, not data loss — serious but not critical |
+| C-3 | Critical | High | Rare trigger (only when ADB daemon is unresponsive) |
+| C-4 | Critical | High | Requires specific timing to trigger |
+| R-2 | Medium | Low | Cosmetic only — timestamp overlay doesn't break functionality |
+| H-1 | High | Medium | Low probability edge case |
+| H-2 | High | Low | Minimal functional impact |
+| H-6 | High | Low | Architecture concern, not user-facing |
+| M-1 | Medium | Low | Negligible with typical segment counts |
+| M-7 | Medium | Low | Purely cosmetic |
 
 ---
 
-## Functional Bugs
+## Critical
 
-Bugs that cause **incorrect behavior** — wrong output, data loss, or broken functionality during normal usage.
+Issues that cause wrong output, data loss, or severely degrade core functionality on every use.
 
-### F-1. Stopping during save deletes segment files mid-read (Critical)
+### 1. Video recorded as square with black bars
 
+- **ID**: F-2
+- **File**: `src/main/kotlin/recorder/DualSegmentRecorder.kt:201`
+- **Repro**: Record on any non-square device (all phones)
+- **Impact**: **Every single recording** has wrong aspect ratio. This is the most visible bug — 100% of users are affected.
+- **Problem**: `--size ${size}x${size}` passes a square resolution (e.g., `1080x1080`) to `screenrecord`. On a 1080x2400 portrait device, the screen is scaled to fit in the square frame with black bars on both sides.
+
+```kotlin
+// Current: always square
+"--size", "${size}x${size}",   // → --size 1080x1080
+
+// Device 1080x2400 → recorded as 486x1080 centered in 1080x1080 with black bars
+```
+
+- **Fix**: Pass the device resolution scaled proportionally.
+
+```kotlin
+val (w, h) = resolution ?: Pair(size, size)
+val scale = size.toDouble() / minOf(w, h)
+val recW = (w * scale).toInt()
+val recH = (h * scale).toInt()
+"--size", "${recW}x${recH}",  // → --size 1080x2400 (proportional)
+```
+
+### 2. Stopping during save deletes segment files mid-read
+
+- **ID**: F-1
 - **File**: `src/main/kotlin/ui/App.kt:95-101`, `src/main/kotlin/recorder/AdbScreenCapture.kt:151-153`
 - **Repro**: Press `Ctrl+S` to save, then `Ctrl+R` to stop before save completes
-- **Problem**: `stopCapturing()` calls `sampleBuffer.cleanup()` which deletes **all segment files** on disk. But FFmpeg is still reading those files for the ongoing save operation. Result: FFmpeg fails or produces a corrupt/truncated video.
-- **Root cause**: The `LaunchedEffect` else branch calls `stopCapturing()` without checking `isSaving`.
+- **Impact**: FFmpeg fails or produces a corrupt/truncated video. User loses the recording.
+- **Problem**: `stopCapturing()` calls `sampleBuffer.cleanup()` which deletes all segment files on disk while FFmpeg is still reading them.
 
 ```
 Timeline:
@@ -43,51 +86,42 @@ Timeline:
 }
 ```
 
-### F-2. Video recorded as square with black bars (High)
+### 3. `concatPrecise` uses libx264 re-encoding unnecessarily
 
-- **File**: `src/main/kotlin/recorder/DualSegmentRecorder.kt:201`
-- **Repro**: Record on any non-square device (all phones)
-- **Problem**: `--size ${size}x${size}` passes a square resolution (e.g., `1080x1080`) to `screenrecord`. On a 1080x2400 portrait device, the screen is scaled to fit in the square frame with **black bars** on both sides. The output video is always square regardless of device orientation.
-
-```kotlin
-// Current: always square
-"--size", "${size}x${size}",   // → --size 1080x1080
-
-// Device 1080x2400 → recorded as 486x1080 centered in 1080x1080 with black bars
-```
-
-- **Fix**: Pass the device resolution scaled proportionally.
+- **ID**: C-1
+- **File**: `src/main/kotlin/recorder/SegmentConcatenator.kt:143-144`
+- **Impact**: Saving a 30-second video takes 30+ seconds with high CPU usage. Every save is ~30x slower than necessary.
+- **Problem**: Segments are already H.264 encoded by `screenrecord`, but `concatPrecise` decodes and re-encodes them with `libx264`.
 
 ```kotlin
-// Calculate proportional size
-val (w, h) = resolution ?: Pair(size, size)
-val scale = size.toDouble() / minOf(w, h)
-val recW = (w * scale).toInt()
-val recH = (h * scale).toInt()
-"--size", "${recW}x${recH}",  // → --size 1080x2400 (proportional)
+// Before (slow, re-encodes)
+"-filter_complex", filterComplex,
+"-map", "[outv]",
+"-c:v", "libx264",
+"-preset", "ultrafast",
+
+// After (fast, stream copy — ~1 second)
+"-f", "concat",
+"-safe", "0",
+"-i", concatListFile.absolutePath,
+"-c", "copy",
 ```
 
-### F-3. Output path change only applies to concat, not screenshots or segments (High)
+- **Fix**: Replace `filter_complex` + `libx264` with `concat` protocol + `-c:v copy`. Handle overlap trimming by using `-ss` (seek) per input instead of trim filters.
 
-- **File**: `src/main/kotlin/recorder/AdbScreenCapture.kt:17-18`
-- **Repro**: Change Output Path in settings, then take a screenshot or save a recording
-- **Problem**: `outputDir` and `segmentsDir` are `val` fields set at construction. Changing the path in settings only updates `concatenator.outputDir` via `setOutputDirectory()`. Afterwards:
-  - **Screenshots** → saved to the **old** path (`AdbScreenCapture.outputDir`)
-  - **New segments** → written to the **old** `.segments/` directory
-  - **Concat output** → saved to the **new** path, but reads segment files from the old path (works by absolute path, but semantically wrong)
+---
 
-```kotlin
-private val outputDir = File(AppSettings.outputPath)      // val — fixed at construction
-private val segmentsDir = File(outputDir, ".segments")     // val — fixed at construction
-```
+## High
 
-- **Fix**: Make `outputDir` and `segmentsDir` respond to path changes, or recreate `AdbScreenCapture` when path changes.
+Significant bugs that cause data loss, process leaks, or hangs in specific but reproducible scenarios.
 
-### F-4. Touch pointer toggle during recording clears entire buffer (High)
+### 4. Touch pointer toggle during recording clears entire buffer
 
+- **ID**: F-4
 - **File**: `src/main/kotlin/ui/App.kt:68-70`
 - **Repro**: Record for 5 minutes, then toggle Touch Pointer in settings
-- **Problem**: `showTouchPointer` is a key of `LaunchedEffect(isRecording, showTouchPointer)`. When the value changes, the effect restarts and calls `sampleBuffer.clear()`, which **deletes all 5 minutes of buffered segments**. Then `startCapturing()` is called, but since `isRunning` is already true, it returns immediately without restarting. Net effect: all buffered data is lost, recording continues from zero.
+- **Impact**: All buffered segments silently deleted. Recording continues but buffer is empty.
+- **Problem**: `showTouchPointer` is a key of `LaunchedEffect(isRecording, showTouchPointer)`. When it changes, the effect restarts and calls `sampleBuffer.clear()`.
 
 ```
 User: records 5 minutes
@@ -98,96 +132,108 @@ LaunchedEffect restarts →
   Recording continues, but buffer is empty
 ```
 
-- **Fix**: Remove `showTouchPointer` from `LaunchedEffect` keys. Apply pointer setting separately without restarting the effect.
+- **Fix**: Remove `showTouchPointer` from `LaunchedEffect` keys. Apply pointer setting separately.
 
 ```kotlin
-// Separate effect for pointer setting only
 LaunchedEffect(showTouchPointer) {
     if (isRecording) {
         adbCapture.setPointerLocation(showTouchPointer)
     }
 }
 
-// Recording effect — no longer depends on showTouchPointer
 LaunchedEffect(isRecording) {
-    if (isRecording && connectedDevice != null) {
-        // Don't clear buffer here — only clear on explicit new recording start
-        ...
-    }
+    if (isRecording && connectedDevice != null) { ... }
 }
 ```
 
-### F-5. concatPrecise fallback produces duplicate frames (Medium)
+### 5. `stop()` doesn't wait for running ADB processes to finish
 
-- **File**: `src/main/kotlin/recorder/SegmentConcatenator.kt:155-156`
-- **Repro**: `concatPrecise` fails (e.g., FFmpeg filter error) and falls back to `concatSimple`
-- **Problem**: The dual recorder creates overlapping segments (3-second overlap between Slot A and B). `concatPrecise` trims these overlaps, but the fallback `concatSimple` does **not** trim. All overlap regions appear twice in the output, causing the same scene to repeat. A 30-second save may produce 45+ seconds of video with duplicate frames.
+- **ID**: R-4
+- **File**: `src/main/kotlin/recorder/DualSegmentRecorder.kt:78-84`
+- **Repro**: Click Stop while `screenrecord` or `adb pull` is in progress
+- **Impact**: Device accumulates `screenrecord` processes. Next recording may fail or run concurrent with the previous one.
+- **Problem**: `stop()` calls `scope?.cancel()` but doesn't wait for processes to finish. The device-side `screenrecord` keeps running.
 
 ```
-Segment timeline (with 3s overlap):
-  A1: [0s ─── 5s]
-  B1:    [2s ─── 7s]
-  A2:       [4s ─── 9s]
-
-concatPrecise: trims overlaps → [0s─5s][5s─7s][7s─9s] = 9s ✓
-concatSimple:  no trimming    → [0s─5s][2s─7s][4s─9s] = 15s (6s duplicated) ✗
+Stop clicked →
+  scope.cancel() → CancellationException thrown
+  cleanupRemote("/sdcard/rec_A_5.mp4") → adb shell rm
+  But device-side screenrecord is still running → recreates the file
+  Next Start → new screenrecord starts → device has 2 concurrent screenrecord processes
 ```
 
-- **Fix**: Apply basic overlap trimming in `concatSimple` using `-ss` (seek), or fail explicitly instead of silently producing wrong output.
-
-### F-6. Screenshot temp file path collision on device (Low)
-
-- **File**: `src/main/kotlin/recorder/AdbScreenCapture.kt:195`
-- **Repro**: Rapid consecutive screenshots (unlikely in practice due to `isSaving` guard)
-- **Problem**: The device temp file is hardcoded as `/sdcard/screenshot_temp.png`. The cleanup process (`adb shell rm`) at line 210 is launched without `waitFor()`. If a second screenshot starts before the `rm` completes, the second screenshot's `screencap` may collide with the first's `rm`.
+- **Fix**: Kill the ADB process and wait for device-side cleanup before returning.
 
 ```kotlin
-val remotePath = "/sdcard/screenshot_temp.png"   // fixed name for all screenshots
+fun stop() {
+    isRunning.set(false)
+    slotAJob?.cancel()
+    slotBJob?.cancel()
+    runBlocking { scope?.coroutineContext?.job?.cancelAndJoin() }
+    scope = null
+}
 ```
 
-- **Fix**: Use a unique temp filename per screenshot (e.g., include timestamp).
+### 6. Multiple devices connected causes all ADB commands to fail
+
+- **ID**: R-1
+- **File**: `src/main/kotlin/recorder/AdbScreenCapture.kt:56`, `src/main/kotlin/recorder/DualSegmentRecorder.kt:196-207`
+- **Repro**: Connect two Android devices (or device + emulator), then start recording
+- **Impact**: All ADB commands fail silently. App shows device as connected but nothing works.
+- **Problem**: `getConnectedDevice()` returns the first device serial, but no ADB command uses `-s <serial>`.
+
+```
+$ adb devices
+DEVICE_A    device
+DEVICE_B    device
+
+$ adb shell screenrecord ...
+error: more than one device/emulator    ← every command fails
+```
+
+- **Fix**: Pass `-s <serial>` to all ADB commands.
 
 ```kotlin
-val remotePath = "/sdcard/screenshot_${timestamp}.png"
+PathFinder.adbPath, "-s", connectedDeviceSerial, "shell", "screenrecord", ...
 ```
 
----
+### 7. Corrupt/empty segment accepted into buffer after partial `adb pull`
 
-## Reliability & Infrastructure
-
-Issues that don't cause wrong output under normal use, but can cause hangs, crashes, or resource leaks.
-
-## Critical
-
-### C-1. `concatPrecise` uses libx264 re-encoding unnecessarily
-
-- **File**: `src/main/kotlin/recorder/SegmentConcatenator.kt:143-144`
-- **Problem**: Segments are already H.264 encoded by `screenrecord`, but `concatPrecise` decodes and re-encodes them with `libx264`. This makes saving a 30-second video take 30+ seconds with high CPU usage.
-- **Fix**: Replace `filter_complex` + `libx264` approach with `concat` protocol + `-c:v copy`. Handle overlap trimming by using `-ss` (seek) per input instead of trim filters.
+- **ID**: R-3
+- **File**: `src/main/kotlin/recorder/DualSegmentRecorder.kt:153-167`
+- **Repro**: Disconnect USB cable briefly during recording (unstable connection)
+- **Impact**: Corrupt segment in buffer causes FFmpeg concat to fail or produce corrupt video.
+- **Problem**: Validation only checks `segmentFile.exists()`, not file size. A 0-byte file passes.
 
 ```kotlin
-// Before (slow, re-encodes)
-"-filter_complex", filterComplex,
-"-map", "[outv]",
-"-c:v", "libx264",
-"-preset", "ultrafast",
-
-// After (fast, stream copy)
-"-f", "concat",
-"-safe", "0",
-"-i", concatListFile.absolutePath,
-"-c", "copy",
+if (pullSuccess && segmentFile.exists()) {   // ← doesn't check file size
 ```
 
-### C-2. No resource cleanup on app exit
+- **Fix**: Add minimum file size check.
 
+```kotlin
+if (pullSuccess && segmentFile.exists() && segmentFile.length() > 1024) {
+```
+
+### 8. `protectedSegments` not thread-safe
+
+- **ID**: M-5
+- **File**: `src/main/kotlin/recorder/SegmentRingBuffer.kt:15`
+- **Impact**: Race condition can cause a protected segment to be deleted during save, leading to crash or corrupt output.
+- **Problem**: `protectedSegments` is a plain `mutableSetOf()` while `segments` is `ConcurrentLinkedDeque`. `enforceConstraints()` reads `protectedSegments.contains()` outside the synchronized scope of `protectSegments()`.
+- **Fix**: Use `ConcurrentHashMap.newKeySet()` or ensure all access is under the same synchronization.
+
+### 9. No resource cleanup on app exit
+
+- **ID**: C-2
 - **File**: `src/main/kotlin/ui/App.kt:35`
-- **Problem**: `AdbScreenCapture` is created with `remember {}` but never cleaned up. When the app window closes, `DualSegmentRecorder`'s coroutine scope and ADB `screenrecord` processes on the device keep running.
-- **Fix**: Add `DisposableEffect` to stop recording and clean up on unmount.
+- **Impact**: `screenrecord` processes persist on device after app close. Touch pointer stays enabled.
+- **Problem**: `AdbScreenCapture` is created with `remember {}` but never cleaned up on unmount.
 
 ```kotlin
 val adbCapture = remember { AdbScreenCapture() }
 
+// Fix: Add DisposableEffect
 DisposableEffect(Unit) {
     onDispose {
         adbCapture.stopCapturing()
@@ -196,27 +242,27 @@ DisposableEffect(Unit) {
 }
 ```
 
-### C-3. `getConnectedDevice()` can hang forever
+### 10. `getConnectedDevice()` can hang forever
 
+- **ID**: C-3
 - **File**: `src/main/kotlin/recorder/AdbScreenCapture.kt:55-61`
-- **Problem**: `adb devices` is called with no timeout. If ADB daemon is unresponsive, `readText()` blocks indefinitely, freezing the UI at startup.
-- **Fix**: Add `withTimeout` or use `process.waitFor(timeout, unit)`.
+- **Impact**: App freezes at startup when ADB daemon is unresponsive.
+- **Problem**: `adb devices` is called with no timeout. `readText()` blocks indefinitely.
 
 ```kotlin
-val process = ProcessBuilder(PathFinder.adbPath, "devices")
-    .redirectErrorStream(true).start()
-
+// Fix: Add timeout
 if (!process.waitFor(5, TimeUnit.SECONDS)) {
     process.destroyForcibly()
     return@withContext null
 }
 ```
 
-### C-4. Buffer overflow when protected segments block eviction
+### 11. Buffer overflow when protected segments block eviction
 
+- **ID**: C-4
 - **File**: `src/main/kotlin/recorder/SegmentRingBuffer.kt:199-216`
-- **Problem**: `enforceConstraints()` stops removing segments if the oldest one is protected. Meanwhile new segments keep being added, causing unbounded disk usage.
-- **Fix**: Skip protected segments and continue evicting the next unprotected one.
+- **Impact**: Unbounded disk usage during save operations.
+- **Problem**: `enforceConstraints()` stops removing segments if the oldest one is protected. New segments keep being added.
 
 ```kotlin
 // Before: breaks entirely
@@ -233,39 +279,58 @@ removable.file.delete()
 
 ---
 
-## High
+## Medium
 
-### H-1. `screenrecord` exit code 1 accepted without file validation
+Moderate impact issues with workarounds or limited scope. Functionality partially works.
 
+### 12. Output path change only applies to concat, not screenshots or segments
+
+- **ID**: F-3
+- **File**: `src/main/kotlin/recorder/AdbScreenCapture.kt:17-18`
+- **Repro**: Change Output Path in settings, then take a screenshot
+- **Impact**: Screenshots and segments go to the old path. Only concat output goes to the new path.
+- **Problem**: `outputDir` and `segmentsDir` are `val` fields set at construction.
+
+```kotlin
+private val outputDir = File(AppSettings.outputPath)      // val — fixed at construction
+private val segmentsDir = File(outputDir, ".segments")     // val — fixed at construction
+```
+
+- **Fix**: Make paths respond to changes, or recreate `AdbScreenCapture` when path changes.
+
+### 13. `concatPrecise` fallback produces duplicate frames
+
+- **ID**: F-5
+- **File**: `src/main/kotlin/recorder/SegmentConcatenator.kt:155-156`
+- **Repro**: `concatPrecise` fails (e.g., FFmpeg filter error)
+- **Impact**: Output video has duplicate frames at overlap regions. A 30-second save may produce 45+ seconds.
+- **Problem**: Fallback `concatSimple` does not trim overlaps.
+
+```
+concatPrecise: trims overlaps → [0s─5s][5s─7s][7s─9s] = 9s
+concatSimple:  no trimming    → [0s─5s][2s─7s][4s─9s] = 15s (6s duplicated)
+```
+
+- **Fix**: Apply basic overlap trimming in `concatSimple` using `-ss`, or fail explicitly.
+
+### 14. `screenrecord` exit code 1 accepted without file validation
+
+- **ID**: H-1
 - **File**: `src/main/kotlin/recorder/DualSegmentRecorder.kt:214-215`
-- **Problem**: Exit code 1 is treated as success, but the output file may not exist or be corrupt. No check on actual file existence or size before proceeding to `adb pull`.
-- **Fix**: Verify the remote file exists before pulling.
+- **Impact**: Corrupt segment may be pulled and added to buffer.
+- **Problem**: Exit code 1 is treated as success, but the output file may not exist or be corrupt.
 
 ```kotlin
 return@withContext (exitCode == 0 || exitCode == 1)
-// Add after: verify remote file
-//   adb shell "ls -la $remotePath" and check output
+// Should verify remote file exists before pulling
 ```
 
-### H-2. Screenshot cleanup process never awaited
+### 15. Saved file path display broken on Windows
 
-- **File**: `src/main/kotlin/recorder/AdbScreenCapture.kt:209-212`
-- **Problem**: `adb shell rm` is launched via `ProcessBuilder.start()` but never waited for. The process becomes a zombie, and the temp file may remain on the device.
-- **Fix**: Add `.waitFor()`.
-
-```kotlin
-// Before
-ProcessBuilder(PathFinder.adbPath, "shell", "rm", remotePath).start()
-
-// After
-ProcessBuilder(PathFinder.adbPath, "shell", "rm", remotePath).start().waitFor()
-```
-
-### H-3. Saved file path display broken on Windows
-
+- **ID**: H-3
 - **File**: `src/main/kotlin/ui/App.kt:125, 155`
-- **Problem**: `substringAfterLast("/")` is used to extract the filename, but Windows paths use `\`. On Windows, the entire absolute path is shown in the status bar.
-- **Fix**: Use `File.name` or `substringAfterLast(File.separator)`.
+- **Impact**: Full absolute path shown in status bar on Windows instead of just the filename.
+- **Problem**: `substringAfterLast("/")` doesn't handle Windows `\` separator.
 
 ```kotlin
 // Before
@@ -275,19 +340,23 @@ ProcessBuilder(PathFinder.adbPath, "shell", "rm", remotePath).start().waitFor()
 "Saved: ${File(outputPath).name}"
 ```
 
-### H-4. Internal recording errors only logged to console
+### 16. Internal recording errors only logged to console
 
+- **ID**: H-4
 - **File**: `src/main/kotlin/recorder/DualSegmentRecorder.kt:217, 237, 279`
-- **Problem**: Errors during `recordSegment`, `pullSegment`, and `getVideoDurationMs` are logged with `println` which is invisible in a desktop app. Users see no feedback.
+- **Impact**: Users get no feedback when internal errors occur. Recording may silently fail.
+- **Problem**: Errors are logged with `println` which is invisible in a desktop app.
 - **Fix**: Propagate errors through `onErrorCallback` or a logging system visible to the UI.
 
-### H-5. Device only detected once at startup
+### 17. Device only detected once at startup
 
+- **ID**: H-5
 - **File**: `src/main/kotlin/ui/App.kt:58-65`
-- **Problem**: `LaunchedEffect(Unit)` runs once. If the device is connected after app launch, the user must manually click "Refresh".
-- **Fix**: Add periodic polling (e.g., every 3 seconds) or use `adb track-devices`.
+- **Impact**: User must manually click "Refresh" if device is connected after launch.
+- **Problem**: `LaunchedEffect(Unit)` runs once. No periodic polling.
 
 ```kotlin
+// Fix: Add periodic polling
 LaunchedEffect(Unit) {
     while (true) {
         connectedDevice = adbCapture.getConnectedDevice()
@@ -298,33 +367,20 @@ LaunchedEffect(Unit) {
 }
 ```
 
-### H-6. `DualSegmentRecorder` uses manual Job management
+### 18. `PathFinder` silently falls back to bare command name
 
-- **File**: `src/main/kotlin/recorder/DualSegmentRecorder.kt:28-30`
-- **Problem**: `slotAJob` and `slotBJob` are nullable vars managed manually. If `stop()` is not called in all code paths, jobs and the scope leak.
-- **Fix**: Use structured concurrency with a single `CoroutineScope` and `cancelChildren()`.
-
----
-
-## Medium
-
-### M-1. `SegmentRingBuffer.getTotalDurationSeconds()` re-sorts on every call
-
-- **File**: `src/main/kotlin/recorder/SegmentRingBuffer.kt:169-174`
-- **Problem**: Called inside `enforceConstraints()` which loops until constraints are met. Each iteration sorts all segments and recalculates overlaps. This is O(n^2).
-- **Fix**: Cache the sorted list and effective duration, or calculate incrementally.
-
-### M-2. `PathFinder` silently falls back to bare command name
-
+- **ID**: M-2
 - **File**: `src/main/kotlin/config/PathFinder.kt:67`
-- **Problem**: If `adb` / `ffmpeg` is not found anywhere, `findExecutable` returns just `"adb"`. This causes a cryptic `IOException: Cannot run program "adb"` later during recording.
-- **Fix**: Validate at app startup and show a clear error dialog if tools are missing.
+- **Impact**: Cryptic `IOException: Cannot run program "adb"` on first run without tools installed.
+- **Problem**: If `adb`/`ffmpeg` is not found, `findExecutable` returns just `"adb"` without warning.
+- **Fix**: Validate at app startup and show a clear error dialog.
 
-### M-3. No save duration validation against buffer
+### 19. No save duration validation against buffer
 
+- **ID**: M-3
 - **File**: `src/main/kotlin/ui/App.kt:148-149`
-- **Problem**: User can request 120 seconds of recording when buffer only has 30 seconds. The save completes but the output is shorter than expected with no explanation.
-- **Fix**: Show the actual available duration in the save dialog, or warn the user.
+- **Impact**: User gets shorter video than expected with no explanation.
+- **Problem**: User can request 120 seconds when buffer only has 30 seconds.
 
 ```kotlin
 val availableDuration = adbCapture.sampleBuffer.getTotalDurationSeconds()
@@ -333,29 +389,78 @@ if (durationSeconds > availableDuration) {
 }
 ```
 
-### M-4. FFmpeg save progress not shown to user
+### 20. FFmpeg save progress not shown to user
 
+- **ID**: M-4
 - **File**: `src/main/kotlin/recorder/SegmentConcatenator.kt:149-151`
-- **Problem**: During `concatPrecise`, the user sees "Saving..." with no progress indication. If re-encoding takes 30+ seconds, the user assumes the app is frozen.
-- **Fix**: Parse FFmpeg's stderr progress output (`time=00:00:15.00`) and report to UI via callback, or show an indeterminate progress bar.
+- **Impact**: User thinks app is frozen during long saves (30+ seconds with C-1 re-encoding).
+- **Problem**: Only "Saving..." is shown with no progress indication.
+- **Fix**: Parse FFmpeg's stderr progress output or show an indeterminate progress bar.
 
-### M-5. `protectedSegments` not thread-safe
+### 21. `getDeviceResolution()` blocks on IO without timeout
 
-- **File**: `src/main/kotlin/recorder/SegmentRingBuffer.kt:15`
-- **Problem**: `protectedSegments` is a plain `mutableSetOf()` while `segments` is `ConcurrentLinkedDeque`. The `@Synchronized` annotation protects `protectSegments()` / `unprotectSegments()`, but `enforceConstraints()` reads `protectedSegments.contains()` inside a different lock scope.
-- **Fix**: Use `ConcurrentHashMap.newKeySet()` or ensure all access is under the same synchronization.
-
-### M-6. `getDeviceResolution()` blocks on IO without timeout
-
+- **ID**: M-6
 - **File**: `src/main/kotlin/recorder/AdbScreenCapture.kt:77-98`
-- **Problem**: Synchronous `ProcessBuilder` call with no timeout. If ADB is slow, the recording start is delayed indefinitely.
+- **Impact**: Recording start delayed indefinitely if ADB is slow.
+- **Problem**: Synchronous `ProcessBuilder` call with no timeout.
 - **Fix**: Use `process.waitFor(timeout, unit)` and make the function `suspend`.
 
-### M-7. `.segments` folder visible on Windows
+---
 
+## Low
+
+Cosmetic issues, near-impossible edge cases, or architecture concerns with no direct user impact.
+
+### 22. `--bugreport` flag always on, `showTimestampOverlay` is dead code
+
+- **ID**: R-2
+- **File**: `src/main/kotlin/recorder/DualSegmentRecorder.kt:205`, `src/main/kotlin/config/AppSettings.kt:38`
+- **Impact**: Timestamp overlay always appears on recordings (cosmetic).
+- **Problem**: `--bugreport` is always added unconditionally. `AppSettings.showTimestampOverlay` is never read.
+- **Fix**: Make it conditional or remove the unused setting.
+
+### 23. Screenshot temp file path collision on device
+
+- **ID**: F-6
+- **File**: `src/main/kotlin/recorder/AdbScreenCapture.kt:195`
+- **Impact**: Screenshot could fail on rapid consecutive attempts. Near-impossible due to `isSaving` guard.
+- **Problem**: Hardcoded `/sdcard/screenshot_temp.png` for all screenshots.
+- **Fix**: Use unique temp filename per screenshot.
+
+### 24. Screenshot cleanup process never awaited
+
+- **ID**: H-2
+- **File**: `src/main/kotlin/recorder/AdbScreenCapture.kt:209-212`
+- **Impact**: Zombie process, temp file may persist on device. Minimal functional impact.
+- **Problem**: `adb shell rm` is launched but never waited for.
+
+```kotlin
+// Fix: Add .waitFor()
+ProcessBuilder(PathFinder.adbPath, "shell", "rm", remotePath).start().waitFor()
+```
+
+### 25. `DualSegmentRecorder` uses manual Job management
+
+- **ID**: H-6
+- **File**: `src/main/kotlin/recorder/DualSegmentRecorder.kt:28-30`
+- **Impact**: Potential scope/job leak if `stop()` is not called in all code paths.
+- **Problem**: `slotAJob` and `slotBJob` are nullable vars managed manually.
+- **Fix**: Use structured concurrency with `cancelChildren()`.
+
+### 26. `SegmentRingBuffer.getTotalDurationSeconds()` re-sorts on every call
+
+- **ID**: M-1
+- **File**: `src/main/kotlin/recorder/SegmentRingBuffer.kt:169-174`
+- **Impact**: O(n^2) in `enforceConstraints()`. Negligible with typical segment counts (~24 segments for 2 minutes).
+- **Problem**: Called in a loop, each call re-sorts all segments.
+- **Fix**: Cache the sorted list or calculate incrementally.
+
+### 27. `.segments` folder visible on Windows
+
+- **ID**: M-7
 - **File**: `src/main/kotlin/recorder/AdbScreenCapture.kt:18`
-- **Problem**: Folders prefixed with `.` are hidden on macOS/Linux but visible on Windows.
-- **Fix**: Set the hidden attribute on Windows after creating the directory.
+- **Impact**: User sees temporary folder in output directory (cosmetic).
+- **Problem**: `.` prefix doesn't hide folders on Windows.
 
 ```kotlin
 if (System.getProperty("os.name").lowercase().contains("win")) {
@@ -363,12 +468,18 @@ if (System.getProperty("os.name").lowercase().contains("win")) {
 }
 ```
 
----
+### 28. `startTime` records host time, not device recording start
 
-## Low
+- **ID**: R-5
+- **File**: `src/main/kotlin/recorder/DualSegmentRecorder.kt:134`
+- **Impact**: Minor trim inaccuracy (~200ms over USB, 1-2s over WiFi ADB).
+- **Problem**: Host-side timestamps used for overlap calculation differ from actual video timing.
+- **Fix**: Use `ffprobe` to get actual video duration for more accurate overlap trimming.
 
-### L-1. Frame count estimate assumes constant 30fps
+### 29. Frame count estimate assumes constant 30fps
 
+- **ID**: L-1
 - **File**: `src/main/kotlin/recorder/SegmentRingBuffer.kt:191`
-- **Problem**: `getFrameCount()` returns `(getTotalDurationSeconds() * 30).toInt()`. Actual frame rate may vary due to VFR. The number is misleading.
+- **Impact**: Misleading frame count in UI (cosmetic).
+- **Problem**: `getFrameCount()` returns `(getTotalDurationSeconds() * 30).toInt()`. Actual frame rate varies (VFR).
 - **Fix**: Display buffer duration in seconds instead of estimated frame count.
