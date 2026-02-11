@@ -29,7 +29,8 @@ class DualSegmentRecorder(
     private var slotBJob: Job? = null
     private var scope: CoroutineScope? = null
 
-    private var recordingSize: Int = 720
+    private var recordingWidth: Int = 720
+    private var recordingHeight: Int = 1280
     private var onSegmentCallback: ((SegmentInfo) -> Unit)? = null
     private var onErrorCallback: ((String) -> Unit)? = null
 
@@ -44,17 +45,19 @@ class DualSegmentRecorder(
     }
 
     /**
-     * Start dual recording with specified size
+     * Start dual recording with specified resolution
      */
     fun start(
-        size: Int,
+        width: Int,
+        height: Int,
         onSegmentReceived: (SegmentInfo) -> Unit,
         onError: (String) -> Unit
     ) {
         if (isRunning.get()) return
 
         isRunning.set(true)
-        recordingSize = size
+        recordingWidth = width
+        recordingHeight = height
         onSegmentCallback = onSegmentReceived
         onErrorCallback = onError
 
@@ -139,7 +142,7 @@ class DualSegmentRecorder(
             try {
 
                 // Record segment on device
-                val recordSuccess = recordSegment(remotePath, recordingSize)
+                val recordSuccess = recordSegment(remotePath)
 
                 if (!recordSuccess) {
                     if (isRunning.get()) {
@@ -191,20 +194,17 @@ class DualSegmentRecorder(
      * Uses --bugreport option when timestamp overlay is enabled
      * This also fixes VFR issues by ensuring constant frame generation
      */
-    private suspend fun recordSegment(remotePath: String, size: Int): Boolean = withContext(Dispatchers.IO) {
+    private suspend fun recordSegment(remotePath: String): Boolean = withContext(Dispatchers.IO) {
         try {
             val command = mutableListOf(
                 PathFinder.adbPath,
                 "shell",
                 "screenrecord",
                 "--time-limit", segmentDurationSeconds.toString(),
-                "--size", "${size}x${size}",
-                "--bit-rate", "3000000"
+                "--size", "${recordingWidth}x${recordingHeight}",
+                "--bit-rate", "3000000",
+                remotePath
             )
-
-            command.add("--bugreport")
-
-            command.add(remotePath)
 
             val process = ProcessBuilder(command).redirectErrorStream(true).start()
 
