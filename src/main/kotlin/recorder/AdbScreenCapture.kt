@@ -98,18 +98,26 @@ class AdbScreenCapture {
     }
 
     /**
-     * Calculate optimal recording size based on device resolution
+     * Calculate optimal recording resolution based on device resolution
+     * Maintains aspect ratio to avoid black bars (F-2 fix)
      */
-    private fun calculateRecordingSize(resolution: Pair<Int, Int>?): Int {
-        if (resolution == null) return 720
+    private fun calculateRecordingResolution(resolution: Pair<Int, Int>?): Pair<Int, Int> {
+        if (resolution == null) return Pair(720, 1280)
 
-        val minDim = minOf(resolution.first, resolution.second)
-        return when {
+        val (w, h) = resolution
+        val minDim = minOf(w, h)
+        val targetMinDim = when {
             minDim >= 1440 -> 1080  // QHD+ → FHD
             minDim >= 1080 -> 720   // FHD → HD
             minDim >= 720 -> 540    // HD → qHD
             else -> minDim          // Original
         }
+
+        val scale = targetMinDim.toDouble() / minDim
+        // Round to even numbers (required by video encoders)
+        val recW = ((w * scale).toInt() / 2) * 2
+        val recH = ((h * scale).toInt() / 2) * 2
+        return Pair(recW, recH)
     }
 
     /**
@@ -136,10 +144,19 @@ class AdbScreenCapture {
         onSampleReceived: () -> Unit,
         onError: (String) -> Unit
     ) {
-        val size = if (maxSize > 0) maxSize else calculateRecordingSize(getDeviceResolution())
+        val resolution = getDeviceResolution()
+        val (recW, recH) = if (maxSize > 0) {
+            // Scale proportionally from maxSize as the short side
+            val (w, h) = resolution ?: Pair(maxSize, maxSize)
+            val scale = maxSize.toDouble() / minOf(w, h)
+            Pair(((w * scale).toInt() / 2) * 2, ((h * scale).toInt() / 2) * 2)
+        } else {
+            calculateRecordingResolution(resolution)
+        }
 
         recorder.start(
-            size = size,
+            width = recW,
+            height = recH,
             onSegmentReceived = { onSampleReceived() },
             onError = onError
         )
