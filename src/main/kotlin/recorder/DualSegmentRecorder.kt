@@ -31,6 +31,7 @@ class DualSegmentRecorder(
 
     private var recordingWidth: Int = 720
     private var recordingHeight: Int = 1280
+    private var deviceSerial: String? = null
     private var onSegmentCallback: ((SegmentInfo) -> Unit)? = null
     private var onErrorCallback: ((String) -> Unit)? = null
 
@@ -45,11 +46,22 @@ class DualSegmentRecorder(
     }
 
     /**
+     * Build ADB command with -s <serial> when a device serial is known
+     */
+    private fun adbCommand(vararg args: String): List<String> {
+        val cmd = mutableListOf(PathFinder.adbPath)
+        deviceSerial?.let { cmd.addAll(listOf("-s", it)) }
+        cmd.addAll(args)
+        return cmd
+    }
+
+    /**
      * Start dual recording with specified resolution
      */
     fun start(
         width: Int,
         height: Int,
+        serial: String? = null,
         onSegmentReceived: (SegmentInfo) -> Unit,
         onError: (String) -> Unit
     ) {
@@ -58,6 +70,7 @@ class DualSegmentRecorder(
         isRunning.set(true)
         recordingWidth = width
         recordingHeight = height
+        deviceSerial = serial
         onSegmentCallback = onSegmentReceived
         onErrorCallback = onError
 
@@ -196,8 +209,7 @@ class DualSegmentRecorder(
      */
     private suspend fun recordSegment(remotePath: String): Boolean = withContext(Dispatchers.IO) {
         try {
-            val command = mutableListOf(
-                PathFinder.adbPath,
+            val command = adbCommand(
                 "shell",
                 "screenrecord",
                 "--time-limit", segmentDurationSeconds.toString(),
@@ -225,10 +237,7 @@ class DualSegmentRecorder(
     private suspend fun pullSegment(remotePath: String, localFile: File): Boolean = withContext(Dispatchers.IO) {
         try {
             val process = ProcessBuilder(
-                PathFinder.adbPath,
-                "pull",
-                remotePath,
-                localFile.absolutePath
+                adbCommand("pull", remotePath, localFile.absolutePath)
             ).redirectErrorStream(true).start()
 
             val exitCode = process.waitFor()
@@ -245,11 +254,7 @@ class DualSegmentRecorder(
     private suspend fun cleanupRemote(remotePath: String) = withContext(Dispatchers.IO) {
         try {
             ProcessBuilder(
-                PathFinder.adbPath,
-                "shell",
-                "rm",
-                "-f",
-                remotePath
+                adbCommand("shell", "rm", "-f", remotePath)
             ).start().waitFor()
         } catch (e: Exception) {
             // Ignore cleanup errors

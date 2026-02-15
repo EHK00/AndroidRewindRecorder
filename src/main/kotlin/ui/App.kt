@@ -93,7 +93,7 @@ fun App() {
                     }
                 )
             } else {
-                adbCapture.stopCapturing()
+                adbCapture.stopCapturing(keepSegments = isSaving)
                 if (!isSaving) {
                     adbCapture.setPointerLocation(false)
                     statusMessage = if (connectedDevice != null) "Stopped" else "No device connected"
@@ -101,10 +101,11 @@ fun App() {
             }
         }
 
-        // isSaving 종료 후 포인터 해제
+        // isSaving 종료 후 정리: 포인터 해제 및 보류된 세그먼트 정리
         LaunchedEffect(isSaving) {
             if (!isSaving && !isRecording) {
                 adbCapture.setPointerLocation(false)
+                adbCapture.sampleBuffer.cleanup()
             }
         }
 
