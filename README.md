@@ -43,53 +43,19 @@ ffmpeg -version
 
 ### Windows
 
-#### ADB (Android Debug Bridge)
-
-**Option A: Android Studio (Recommended)**
-1. Install [Android Studio](https://developer.android.com/studio)
-2. ADB is included automatically (default path: `%LOCALAPPDATA%\Android\Sdk\platform-tools\`)
-3. Add to system PATH:
-   - Press `Win + S` → Search "Environment Variables" → **Edit the system environment variables**
-   - Click **Environment Variables** → Select **Path** → **Edit** → **New**
-   - Enter `%LOCALAPPDATA%\Android\Sdk\platform-tools` → OK
-
-**Option B: Standalone Platform-Tools**
-1. Download [SDK Platform-Tools](https://developer.android.com/tools/releases/platform-tools) for Windows
-2. Extract to a folder (e.g., `C:\platform-tools`)
-3. Add that folder to system PATH
+**Using winget (Recommended):**
+```cmd
+winget install Google.PlatformTools
+winget install Gyan.FFmpeg
+```
 
 **Verify installation:**
 ```cmd
 adb version
-```
-
-#### FFmpeg
-
-**Option A: winget (Recommended)**
-```cmd
-winget install Gyan.FFmpeg
-```
-
-**Option B: Manual Install**
-1. Download `ffmpeg-release-essentials.zip` from [gyan.dev/ffmpeg](https://www.gyan.dev/ffmpeg/builds/)
-2. Extract to a folder (e.g., `C:\ffmpeg`)
-3. Add `C:\ffmpeg\bin` to system PATH
-
-**Option C: Scoop**
-```cmd
-scoop install ffmpeg
-```
-
-**Option D: Chocolatey**
-```cmd
-choco install ffmpeg
-```
-
-**Verify installation:**
-```cmd
 ffmpeg -version
-ffprobe -version
 ```
+
+> If `adb` is not recognized after install, add the install path to your system PATH manually.
 
 ### Android Device Setup
 
