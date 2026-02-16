@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "com.debugtool"
-version = "1.0.0"
+version = "1.0.1"
 
 dependencies {
     implementation(compose.desktop.currentOs)
@@ -26,7 +26,7 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Exe)
             packageName = "AndroidRewindRecorder"
-            packageVersion = "1.0.1"
+            packageVersion = project.version.toString()
 
             macOS {
                 bundleID = "com.debugtool.androidrewindrecorder"
