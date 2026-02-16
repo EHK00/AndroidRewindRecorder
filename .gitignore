@@ -22,14 +22,6 @@ ehthumbs.db
 Thumbs.db
 Desktop.ini
 
-# Kotlin
-*.class
-*.log
-*.jar
-!gradle/wrapper/gradle-wrapper.jar
-*.war
-*.ear
-
 # Android
 local.properties
 *.jks
