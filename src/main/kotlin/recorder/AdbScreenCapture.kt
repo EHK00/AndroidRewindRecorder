@@ -17,6 +17,9 @@ class AdbScreenCapture {
     private val outputDir = File(AppSettings.outputPath)
     private val segmentsDir = File(outputDir, ".segments")
 
+    // Connected device serial for -s flag (R-1 fix: multi-device support)
+    private var deviceSerial: String? = null
+
     // Buffer size based on user setting + 20% margin for safety
     private val bufferDurationSeconds: Int
         get() = (AppSettings.bufferDuration * 1.2).toInt().coerceAtLeast(30)
@@ -42,6 +45,16 @@ class AdbScreenCapture {
         // Uses default: 5s segments, 2s offset, 3s overlap
     )
 
+    /**
+     * Build ADB command with -s <serial> when a device serial is known
+     */
+    private fun adbCommand(vararg args: String): List<String> {
+        val cmd = mutableListOf(PathFinder.adbPath)
+        deviceSerial?.let { cmd.addAll(listOf("-s", it)) }
+        cmd.addAll(args)
+        return cmd
+    }
+
     init {
         outputDir.mkdirs()
         segmentsDir.mkdirs()
@@ -62,11 +75,15 @@ class AdbScreenCapture {
             val lines = output.lines()
             for (line in lines) {
                 if (line.contains("\tdevice")) {
-                    return@withContext line.split("\t").firstOrNull()?.trim()
+                    val serial = line.split("\t").firstOrNull()?.trim()
+                    deviceSerial = serial
+                    return@withContext serial
                 }
             }
+            deviceSerial = null
             return@withContext null
         } catch (e: Exception) {
+            deviceSerial = null
             return@withContext null
         }
     }
@@ -77,7 +94,7 @@ class AdbScreenCapture {
     fun getDeviceResolution(): Pair<Int, Int>? {
         return try {
             val process = ProcessBuilder(
-                PathFinder.adbPath, "shell", "wm", "size"
+                adbCommand("shell", "wm", "size")
             ).redirectErrorStream(true).start()
 
             val output = process.inputStream.bufferedReader().readText()
@@ -127,8 +144,7 @@ class AdbScreenCapture {
         try {
             val value = if (enable) "1" else "0"
             ProcessBuilder(
-                PathFinder.adbPath, "shell",
-                "settings", "put", "system", "pointer_location", value
+                adbCommand("shell", "settings", "put", "system", "pointer_location", value)
             ).start().waitFor()
         } catch (e: Exception) {
             // Ignore errors
@@ -157,6 +173,7 @@ class AdbScreenCapture {
         recorder.start(
             width = recW,
             height = recH,
+            serial = deviceSerial,
             onSegmentReceived = { onSampleReceived() },
             onError = onError
         )
@@ -164,10 +181,13 @@ class AdbScreenCapture {
 
     /**
      * Stop capturing
+     * @param keepSegments if true, skip cleanup (segments are still being read by FFmpeg)
      */
-    fun stopCapturing() {
+    fun stopCapturing(keepSegments: Boolean = false) {
         recorder.stop()
-        sampleBuffer.cleanup()
+        if (!keepSegments) {
+            sampleBuffer.cleanup()
+        }
     }
 
     /**
@@ -213,19 +233,19 @@ class AdbScreenCapture {
 
             // Capture screenshot
             val captureProcess = ProcessBuilder(
-                PathFinder.adbPath, "shell", "screencap", "-p", remotePath
+                adbCommand("shell", "screencap", "-p", remotePath)
             ).start()
             captureProcess.waitFor()
 
             // Pull to local
             val pullProcess = ProcessBuilder(
-                PathFinder.adbPath, "pull", remotePath, outputFile.absolutePath
+                adbCommand("pull", remotePath, outputFile.absolutePath)
             ).start()
             pullProcess.waitFor()
 
             // Cleanup
             ProcessBuilder(
-                PathFinder.adbPath, "shell", "rm", remotePath
+                adbCommand("shell", "rm", remotePath)
             ).start()
 
             return@withContext if (outputFile.exists()) outputFile.absolutePath else null
