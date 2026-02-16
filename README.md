@@ -105,23 +105,16 @@ ffprobe -version
 
 ## Installation
 
-### Option 1: Download DMG (macOS)
-1. Download `AndroidRewindRecorder-1.1.0.dmg` from Releases
-2. Open DMG and drag app to Applications
-3. Run the following command to allow unsigned app:
-   ```bash
-   xattr -cr /Applications/AndroidRewindRecorder.app
-   ```
-4. Launch the app
-
-### Option 2: Run JAR (Cross-platform)
-1. Download `AndroidRewindRecorder-<os>-<arch>.jar` from Releases
+### Option 1: Download JAR (Recommended)
+1. Go to [Releases](../../releases) and download the JAR for your OS:
+   - `AndroidRewindRecorder-<version>-macos.jar` (macOS)
+   - `AndroidRewindRecorder-<version>-windows.jar` (Windows)
 2. Run with Java 17+:
    ```bash
-   java -jar AndroidRewindRecorder-<os>-<arch>-1.0.1.jar
+   java -jar AndroidRewindRecorder-<version>-macos.jar
    ```
 
-### Option 3: Build from Source
+### Option 2: Build from Source
 
 **macOS / Linux:**
 ```bash
@@ -133,18 +126,17 @@ ffprobe -version
 gradlew.bat run
 ```
 
-#### Package Installer
+#### Package Options
 
 ```bash
+# Uber JAR (recommended)
+./gradlew packageUberJarForCurrentOS
+
 # macOS DMG (requires JDK with jpackage)
-JAVA_HOME=/Library/Java/JavaVirtualMachines/temurin-17.jdk/Contents/Home ./gradlew packageDmg
+./gradlew packageDmg
 
 # Windows MSI/EXE (requires WiX Toolset for MSI)
 gradlew.bat packageMsi
-gradlew.bat packageExe
-
-# Cross-platform JAR
-./gradlew packageUberJarForCurrentOS
 ```
 
 ## Usage
