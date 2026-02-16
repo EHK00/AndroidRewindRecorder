@@ -1,7 +1,6 @@
 # Gradle
 .gradle/
 build/
-!gradle/wrapper/gradle-wrapper.jar
 
 # IDE
 .idea/
@@ -22,13 +21,6 @@ build/
 ehthumbs.db
 Thumbs.db
 Desktop.ini
-
-# Kotlin
-*.class
-*.log
-*.jar
-*.war
-*.ear
 
 # Android
 local.properties
