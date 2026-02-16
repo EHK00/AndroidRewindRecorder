@@ -43,19 +43,29 @@ ffmpeg -version
 
 ### Windows
 
-**Using winget (Recommended):**
-```cmd
+PowerShell을 **관리자 권한**으로 열고 아래 명령어를 순서대로 붙여넣기하세요.
+
+**1. Install:**
+```powershell
 winget install Google.PlatformTools
 winget install Gyan.FFmpeg
 ```
 
-**Verify installation:**
-```cmd
+**2. Verify (restart terminal first):**
+```powershell
 adb version
 ffmpeg -version
 ```
 
-> If `adb` is not recognized after install, add the install path to your system PATH manually.
+> **If commands are not recognized**, run the following to add winget Links to PATH:
+> ```powershell
+> $linksPath = "$env:LOCALAPPDATA\Microsoft\WinGet\Links"
+> $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+> if ($userPath -notlike "*$linksPath*") {
+>     [Environment]::SetEnvironmentVariable("Path", "$userPath;$linksPath", "User")
+>     Write-Host "Added $linksPath to PATH. Restart terminal." -ForegroundColor Green
+> }
+> ```
 
 ### Android Device Setup
 
