@@ -43,7 +43,7 @@ ffmpeg -version
 
 ### Windows
 
-PowerShell을 **관리자 권한**으로 열고 아래 명령어를 순서대로 붙여넣기하세요.
+Open PowerShell with administrator privileges and paste the following commands in order.
 
 **1. Install:**
 ```powershell
