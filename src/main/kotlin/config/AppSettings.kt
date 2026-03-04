@@ -1,45 +1,57 @@
 package config
 
 import java.io.File
-import java.util.prefs.Preferences
+import java.util.Properties
 
 object AppSettings {
-    private val prefs: Preferences = Preferences.userNodeForPackage(AppSettings::class.java)
+    private val configDir: File = run {
+        val location = AppSettings::class.java.protectionDomain?.codeSource?.location
+        if (location != null) {
+            try {
+                val file = File(location.toURI())
+                if (file.isFile) file.parentFile else file
+            } catch (e: Exception) {
+                File(System.getProperty("user.dir"))
+            }
+        } else {
+            File(System.getProperty("user.dir"))
+        }
+    }
+    private val configFile = File(configDir, "settings.properties")
 
-    private const val KEY_BUFFER_DURATION = "bufferDuration"
-    private const val KEY_FPS = "fps"
-    private const val KEY_OUTPUT_PATH = "outputPath"
-    private const val KEY_SHOW_TOUCH_POINTER = "showTouchPointer"
-    private const val KEY_SHOW_TIMESTAMP_OVERLAY = "showTimestampOverlay"
+    private val props = Properties().also { p ->
+        if (configFile.exists()) {
+            configFile.inputStream().use { p.load(it) }
+        }
+    }
 
-    // 기본값
-    private const val DEFAULT_BUFFER_DURATION = 60
-    private const val DEFAULT_FPS = 30
-    private val DEFAULT_OUTPUT_PATH = File(System.getProperty("user.home"), "Desktop/AndroidRecordings").absolutePath
-    private const val DEFAULT_SHOW_TOUCH_POINTER = true
-    private const val DEFAULT_SHOW_TIMESTAMP_OVERLAY = true
+    private val DEFAULT_OUTPUT_PATH =
+        File(System.getProperty("user.home"), "Desktop/AndroidRecordings").absolutePath
 
     var bufferDuration: Int
-        get() = prefs.getInt(KEY_BUFFER_DURATION, DEFAULT_BUFFER_DURATION)
-        set(value) = prefs.putInt(KEY_BUFFER_DURATION, value)
+        get() = props.getProperty("bufferDuration")?.toIntOrNull() ?: 60
+        set(value) { props.setProperty("bufferDuration", value.toString()) }
 
     var fps: Int
-        get() = prefs.getInt(KEY_FPS, DEFAULT_FPS)
-        set(value) = prefs.putInt(KEY_FPS, value)
+        get() = props.getProperty("fps")?.toIntOrNull() ?: 30
+        set(value) { props.setProperty("fps", value.toString()) }
 
     var outputPath: String
-        get() = prefs.get(KEY_OUTPUT_PATH, DEFAULT_OUTPUT_PATH)
-        set(value) = prefs.put(KEY_OUTPUT_PATH, value)
+        get() = props.getProperty("outputPath") ?: DEFAULT_OUTPUT_PATH
+        set(value) { props.setProperty("outputPath", value) }
 
     var showTouchPointer: Boolean
-        get() = prefs.getBoolean(KEY_SHOW_TOUCH_POINTER, DEFAULT_SHOW_TOUCH_POINTER)
-        set(value) = prefs.putBoolean(KEY_SHOW_TOUCH_POINTER, value)
+        get() = props.getProperty("showTouchPointer")?.toBooleanStrictOrNull() ?: true
+        set(value) { props.setProperty("showTouchPointer", value.toString()) }
 
     var showTimestampOverlay: Boolean
-        get() = prefs.getBoolean(KEY_SHOW_TIMESTAMP_OVERLAY, DEFAULT_SHOW_TIMESTAMP_OVERLAY)
-        set(value) = prefs.putBoolean(KEY_SHOW_TIMESTAMP_OVERLAY, value)
+        get() = props.getProperty("showTimestampOverlay")?.toBooleanStrictOrNull() ?: true
+        set(value) { props.setProperty("showTimestampOverlay", value.toString()) }
 
     fun flush() {
-        prefs.flush()
+        configFile.parentFile?.mkdirs()
+        configFile.outputStream().use {
+            props.store(it, "AndroidRewindRecorder Settings")
+        }
     }
 }
