@@ -43,53 +43,29 @@ ffmpeg -version
 
 ### Windows
 
-#### ADB (Android Debug Bridge)
+PowerShell을 **관리자 권한**으로 열고 아래 명령어를 순서대로 붙여넣기하세요.
 
-**Option A: Android Studio (Recommended)**
-1. Install [Android Studio](https://developer.android.com/studio)
-2. ADB is included automatically (default path: `%LOCALAPPDATA%\Android\Sdk\platform-tools\`)
-3. Add to system PATH:
-   - Press `Win + S` → Search "Environment Variables" → **Edit the system environment variables**
-   - Click **Environment Variables** → Select **Path** → **Edit** → **New**
-   - Enter `%LOCALAPPDATA%\Android\Sdk\platform-tools` → OK
-
-**Option B: Standalone Platform-Tools**
-1. Download [SDK Platform-Tools](https://developer.android.com/tools/releases/platform-tools) for Windows
-2. Extract to a folder (e.g., `C:\platform-tools`)
-3. Add that folder to system PATH
-
-**Verify installation:**
-```cmd
-adb version
-```
-
-#### FFmpeg
-
-**Option A: winget (Recommended)**
-```cmd
+**1. Install:**
+```powershell
+winget install Google.PlatformTools
 winget install Gyan.FFmpeg
 ```
 
-**Option B: Manual Install**
-1. Download `ffmpeg-release-essentials.zip` from [gyan.dev/ffmpeg](https://www.gyan.dev/ffmpeg/builds/)
-2. Extract to a folder (e.g., `C:\ffmpeg`)
-3. Add `C:\ffmpeg\bin` to system PATH
-
-**Option C: Scoop**
-```cmd
-scoop install ffmpeg
-```
-
-**Option D: Chocolatey**
-```cmd
-choco install ffmpeg
-```
-
-**Verify installation:**
-```cmd
+**2. Verify (restart terminal first):**
+```powershell
+adb version
 ffmpeg -version
-ffprobe -version
 ```
+
+> **If commands are not recognized**, run the following to add winget Links to PATH:
+> ```powershell
+> $linksPath = "$env:LOCALAPPDATA\Microsoft\WinGet\Links"
+> $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+> if ($userPath -notlike "*$linksPath*") {
+>     [Environment]::SetEnvironmentVariable("Path", "$userPath;$linksPath", "User")
+>     Write-Host "Added $linksPath to PATH. Restart terminal." -ForegroundColor Green
+> }
+> ```
 
 ### Android Device Setup
 
